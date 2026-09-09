@@ -16,6 +16,7 @@ bun.lockb
 !.env.example
 # 비밀이 아니라 '로컬은 dev API 를 본다' 는 약속이라 저장소에 둔다.
 !.env.development
+env-vault/
 *.pem
 *.key
 *.p12
