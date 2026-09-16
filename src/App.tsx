@@ -18,6 +18,7 @@ import { MyOrderDetail } from './pages/me/MyOrderDetail'
 import { AdminFarmLayout } from './lib/farmWorkspace'
 import { FarmDashboard } from './pages/farm/Dashboard'
 import { FarmOrders } from './pages/farm/Orders'
+import { FarmOrderCreate } from './pages/farm/OrderCreate'
 import { FarmDelivery } from './pages/farm/Delivery'
 import { FarmProducts } from './pages/farm/Products'
 import { FarmSettings } from './pages/farm/Settings'
@@ -131,6 +132,7 @@ export default function App() {
           <Route index element={<FarmDashboard />} />
           <Route path="products" element={<FarmProducts />} />
           <Route path="orders" element={<FarmOrders />} />
+          <Route path="orders/new" element={<FarmOrderCreate />} />
           <Route path="delivery" element={<FarmDelivery />} />
           <Route path="settings" element={<FarmSettings />} />
         </Route>

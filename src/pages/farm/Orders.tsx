@@ -1,10 +1,12 @@
+import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { FarmOrderPageLink } from '../../components/layout/FarmOrderPageLink'
 import { Header } from '../../components/layout/Header'
 import { NotificationBell } from '../../components/notifications/NotificationBell'
 import { DepositConfirmExtra } from '../../components/shared/DepositConfirmExtra'
 import { OrderItem } from '../../components/shared/OrderItem'
+import { Button } from '../../components/ui/Button'
 import { useFarmWorkspace } from '../../lib/farmWorkspace'
 import { farmUpdatableStatuses, statusLabels } from '../../lib/orderStatus'
 import { toOrderListModel, type OrderRow } from '../../lib/orders'
@@ -24,6 +26,7 @@ const filters: { id: FilterStatus; label: string }[] = [
 
 export function FarmOrders() {
   const { farm, basePath, isAdminView } = useFarmWorkspace()
+  const navigate = useNavigate()
   const [params] = useSearchParams()
   const [filter, setFilter] = useState<FilterStatus>('all')
   const [orders, setOrders] = useState<OrderRow[]>([])
@@ -66,6 +69,12 @@ export function FarmOrders() {
         }
       />
       <div className="px-4 py-4 md:px-6 max-w-5xl mx-auto space-y-4">
+        <div className="flex justify-end">
+          <Button type="button" size="sm" onClick={() => navigate(`${basePath}/orders/new`)}>
+            <Plus className="h-4 w-4" />
+            직접 추가하기
+          </Button>
+        </div>
         <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
           {filters.map(({ id, label }) => (
             <button
