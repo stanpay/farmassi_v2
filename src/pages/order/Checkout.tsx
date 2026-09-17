@@ -13,6 +13,12 @@ import { ConfirmDialog } from '../../components/ui/ConfirmDialog'
 import { ErrorText, PageSpinner } from '../../components/ui/Feedback'
 import { shippingFeeFor } from '../../lib/shippingFee'
 import { clearCart, getCart } from '../../lib/cart'
+import {
+  createDevBypassCheckoutFarm,
+  createDevBypassProducts,
+  ensureDevBypassCart,
+  isDevAuthBypass,
+} from '../../lib/devAuthBypass'
 import { formatPrice } from '../../lib/format'
 import { invokeFunction } from '../../lib/functions'
 import {
@@ -101,6 +107,17 @@ export function Checkout() {
 
   useEffect(() => {
     async function load() {
+      if (isDevAuthBypass()) {
+        const farmData = createDevBypassCheckoutFarm(farmSlug)
+        const productRows = createDevBypassProducts(farmData.id)
+        ensureDevBypassCart(farmSlug, productRows)
+        setFarm(farmData)
+        setProducts(productRows)
+        setTodayQty(emptyTodayQty())
+        setLoading(false)
+        return
+      }
+
       const { data: farmRow } = await supabase.from('farms').select('*').eq('slug', farmSlug).maybeSingle()
       const farmData = farmRow as Farm | null
       setFarm(farmData)
@@ -196,6 +213,10 @@ export function Checkout() {
       return
     }
     if (!farm) return
+    if (isDevAuthBypass()) {
+      setError('로컬 데모 모드에서는 주문을 전송하지 않습니다.')
+      return
+    }
     setPending(true)
     try {
       const result = await invokeFunction<CheckoutResult>('create-order', {

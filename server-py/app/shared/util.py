@@ -19,6 +19,18 @@ async def is_admin(conn: asyncpg.Connection, user_id: str) -> bool:
     return bool(result.data) and result.data.get("role") == "admin"
 
 
+async def is_farm_member(conn: asyncpg.Connection, user_id: str, farm_id: str) -> bool:
+    result = (
+        await sb(conn)
+        .from_("farm_members")
+        .select("farm_id")
+        .eq("farm_id", farm_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+    )
+    return bool(result.data)
+
+
 def seoul_date_compact(now: datetime | None = None) -> str:
     return (now or datetime.now(timezone.utc)).astimezone(_KST).strftime("%Y%m%d")
 

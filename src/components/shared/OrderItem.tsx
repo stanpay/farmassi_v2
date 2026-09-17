@@ -2,17 +2,21 @@ import { ChevronDown, MessageSquare, Phone } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { OrderListModel } from '../../types/orderList'
 import { formatPrice } from '../../lib/format'
+import { maskAddress, maskPersonName, maskPhone } from '../../lib/privacy'
 import { statusColors, statusLabels } from '../../lib/orderStatus'
 import { Card } from '../ui/Card'
+import { SensitiveContent } from './SensitiveContent'
 
 interface OrderItemProps {
   order: OrderListModel
   selected?: boolean
   onSelect?: (id: string) => void
   extra?: ReactNode
+  /** 이름·연락처·주소를 민감 콘텐츠로 가린다 */
+  maskSensitive?: boolean
 }
 
-export function OrderItem({ order, selected, onSelect, extra }: OrderItemProps) {
+export function OrderItem({ order, selected, onSelect, extra, maskSensitive = false }: OrderItemProps) {
   return (
     <Card className={selected ? 'ring-2 ring-primary' : ''}>
       <div className="flex items-start gap-3">
@@ -27,7 +31,26 @@ export function OrderItem({ order, selected, onSelect, extra }: OrderItemProps) 
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
-              <h4 className="font-semibold text-gray-900 truncate">{order.customerName}</h4>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <h4 className="font-semibold text-gray-900 truncate">
+                  {maskSensitive ? (
+                    <SensitiveContent
+                      label="이름"
+                      preview={maskPersonName(order.customerName)}
+                      className="align-middle"
+                    >
+                      {order.customerName}
+                    </SensitiveContent>
+                  ) : (
+                    order.customerName
+                  )}
+                </h4>
+                {order.reorderCount != null && order.reorderCount >= 2 && (
+                  <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                    재주문 {order.reorderCount}회
+                  </span>
+                )}
+              </div>
               {order.orderNo && <p className="text-xs text-muted">{order.orderNo}</p>}
             </div>
             <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusColors[order.status]}`}>
@@ -35,16 +58,39 @@ export function OrderItem({ order, selected, onSelect, extra }: OrderItemProps) 
             </span>
           </div>
           <p className="mt-1 text-sm text-gray-700">{order.productSummary}</p>
-          <p className="mt-0.5 text-sm text-muted truncate">{order.address}</p>
+          <p className="mt-0.5 text-sm text-muted">
+            {maskSensitive && order.address ? (
+              <SensitiveContent label="주소" preview={maskAddress(order.address)}>
+                {order.address}
+              </SensitiveContent>
+            ) : (
+              <span className="truncate">{order.address}</span>
+            )}
+          </p>
           {order.customerPhone && (
-            <a
-              href={`tel:${order.customerPhone.replace(/[^0-9+]/g, '')}`}
-              onClick={(e) => e.stopPropagation()}
-              className="mt-0.5 inline-flex items-center gap-1 text-sm text-muted hover:text-primary"
-            >
-              <Phone className="h-3.5 w-3.5 shrink-0" />
-              {order.customerPhone}
-            </a>
+            maskSensitive ? (
+              <div className="mt-0.5 inline-flex items-center gap-1 text-sm text-muted">
+                <Phone className="h-3.5 w-3.5 shrink-0" />
+                <SensitiveContent label="연락처" preview={maskPhone(order.customerPhone)}>
+                  <a
+                    href={`tel:${order.customerPhone.replace(/[^0-9+]/g, '')}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="hover:text-primary"
+                  >
+                    {order.customerPhone}
+                  </a>
+                </SensitiveContent>
+              </div>
+            ) : (
+              <a
+                href={`tel:${order.customerPhone.replace(/[^0-9+]/g, '')}`}
+                onClick={(e) => e.stopPropagation()}
+                className="mt-0.5 inline-flex items-center gap-1 text-sm text-muted hover:text-primary"
+              >
+                <Phone className="h-3.5 w-3.5 shrink-0" />
+                {order.customerPhone}
+              </a>
+            )
           )}
           {order.memo && (
             <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2.5 py-2 text-sm text-amber-900">
@@ -62,7 +108,7 @@ export function OrderItem({ order, selected, onSelect, extra }: OrderItemProps) 
           {order.trackingNumber && (
             <p className="mt-1 text-xs text-muted">운송장: {order.trackingNumber}</p>
           )}
-          <OrderDetails order={order} />
+          <OrderDetails order={order} maskSensitive={maskSensitive} />
           {extra}
         </div>
       </div>
@@ -71,12 +117,30 @@ export function OrderItem({ order, selected, onSelect, extra }: OrderItemProps) 
 }
 
 /** 한 줄. 값이 없으면 아예 그리지 않는다 — 빈 칸이 늘어서면 읽기 어렵다. */
-function Row({ label, value }: { label: string; value?: string | null }) {
+function Row({
+  label,
+  value,
+  sensitive,
+  preview,
+}: {
+  label: string
+  value?: string | null
+  sensitive?: boolean
+  preview?: string
+}) {
   if (!value) return null
   return (
     <div className="flex gap-2">
       <dt className="w-16 shrink-0 text-muted">{label}</dt>
-      <dd className="min-w-0 flex-1 break-words text-gray-800">{value}</dd>
+      <dd className="min-w-0 flex-1 break-words text-gray-800">
+        {sensitive ? (
+          <SensitiveContent label={label} preview={preview ?? value}>
+            {value}
+          </SensitiveContent>
+        ) : (
+          value
+        )}
+      </dd>
     </div>
   )
 }
@@ -87,7 +151,7 @@ function Row({ label, value }: { label: string; value?: string | null }) {
  * 카드에 다 펼치면 목록을 훑을 수가 없어서 접어 둔다. `details` 를 쓰면
  * 열고 닫는 상태를 따로 들고 있지 않아도 된다.
  */
-function OrderDetails({ order }: { order: OrderListModel }) {
+function OrderDetails({ order, maskSensitive }: { order: OrderListModel; maskSensitive?: boolean }) {
   const hasSender = Boolean(
     order.senderName || order.senderPhone || order.senderAddress || order.senderAddressDetail,
   )
@@ -101,21 +165,52 @@ function OrderDetails({ order }: { order: OrderListModel }) {
         주문자 작성 정보
       </summary>
       <dl className="space-y-1 px-2.5 pb-2.5 text-xs">
-        <Row label="받는 분" value={order.customerName} />
-        <Row label="연락처" value={order.customerPhone} />
-        <Row label="주소" value={order.address} />
+        <Row
+          label="받는 분"
+          value={order.customerName}
+          sensitive={maskSensitive}
+          preview={maskPersonName(order.customerName)}
+        />
+        <Row
+          label="연락처"
+          value={order.customerPhone}
+          sensitive={maskSensitive}
+          preview={order.customerPhone ? maskPhone(order.customerPhone) : undefined}
+        />
+        <Row
+          label="주소"
+          value={order.address}
+          sensitive={maskSensitive}
+          preview={order.address ? maskAddress(order.address) : undefined}
+        />
         {hasSender && (
           <>
             <div className="!mt-2 border-t border-gray-200 pt-2" />
-            <Row label="보내는 분" value={order.senderName} />
-            <Row label="연락처" value={order.senderPhone} />
-            <Row label="주소" value={order.senderAddress} />
-            {/*
-              주소는 우편번호·도로명·상세를 합쳐 한 줄로 보여 준다. 상세주소만
-              적고 주소는 비운 주문이 있어서, 그럴 때는 상세만이라도 내보낸다.
-            */}
+            <Row
+              label="보내는 분"
+              value={order.senderName}
+              sensitive={maskSensitive}
+              preview={order.senderName ? maskPersonName(order.senderName) : undefined}
+            />
+            <Row
+              label="연락처"
+              value={order.senderPhone}
+              sensitive={maskSensitive}
+              preview={order.senderPhone ? maskPhone(order.senderPhone) : undefined}
+            />
+            <Row
+              label="주소"
+              value={order.senderAddress}
+              sensitive={maskSensitive}
+              preview={order.senderAddress ? maskAddress(order.senderAddress) : undefined}
+            />
             {!order.senderAddress && (
-              <Row label="상세주소" value={order.senderAddressDetail} />
+              <Row
+                label="상세주소"
+                value={order.senderAddressDetail}
+                sensitive={maskSensitive}
+                preview={order.senderAddressDetail ? maskAddress(order.senderAddressDetail) : undefined}
+              />
             )}
           </>
         )}
@@ -131,7 +226,6 @@ function OrderDetails({ order }: { order: OrderListModel }) {
           value={order.shippingFee === undefined ? null : formatPrice(order.shippingFee)}
         />
         <Row label="합계" value={formatPrice(order.amount)} />
-        {/* 손님이 실제로 보낼 금액. 합계와 다르면 그때만 따로 보여 준다. */}
         {order.depositDueAmount !== undefined && order.depositDueAmount !== order.amount && (
           <Row label="입금 금액" value={formatPrice(order.depositDueAmount)} />
         )}

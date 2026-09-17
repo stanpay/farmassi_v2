@@ -4,6 +4,7 @@ import { bankdaAccountStatus } from './bankdaAccountStatus.ts'
 import { bankdaOtt } from './bankdaOtt.ts'
 import { confirmDeposit } from './confirmDeposit.ts'
 import { createOrder } from './createOrder.ts'
+import { epostAddress } from './epostAddress.ts'
 import { farmTodayQty } from './farmTodayQty.ts'
 import { kpostShipment } from './kpostShipment.ts'
 import { matchDeposit } from './matchDeposit.ts'
@@ -18,6 +19,7 @@ export const functions: Record<string, FnHandler> = {
   'bankda-ott': bankdaOtt,
   'confirm-deposit': confirmDeposit,
   'create-order': createOrder,
+  'epost-address': epostAddress,
   'farm-today-qty': farmTodayQty,
   'kpost-shipment': kpostShipment,
   'match-deposit': matchDeposit,

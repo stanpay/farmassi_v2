@@ -5,6 +5,7 @@ import { defineConfig, type Plugin } from 'vite'
 import pkg from './package.json' with { type: 'json' }
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { epostDevProxy } from './vite.epostDevProxy'
 
 const SW_COMMIT_PLACEHOLDER = '__GIT_COMMIT__'
 
@@ -49,7 +50,7 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
     __APP_COMMIT__: JSON.stringify(gitCommitHash()),
   },
-  plugins: [react(), tailwindcss(), injectSwGitHash()],
+  plugins: [react(), tailwindcss(), injectSwGitHash(), epostDevProxy()],
   base: '/',
   server: {
     port: 5173,

@@ -1,6 +1,7 @@
 import type { Farm, Order, OrderItem, Shipment } from '../types/models'
 import type { OrderListModel } from '../types/orderList'
 import { formatDateTime, fullAddress } from './format'
+import { digitsOnly } from './phone'
 
 export type { OrderListModel } from '../types/orderList'
 export type FarmJoin = Pick<Farm, 'name' | 'slug'>
@@ -50,8 +51,39 @@ export function farmsFromOrders(orders: OrderRow[]) {
   }))
 }
 
-export function toOrderListModel(order: OrderRow): OrderListModel {
+/**
+ * 연락처별 주문 순번(1부터). 2 이상이면 재주문.
+ * 취소 건은 제외한다.
+ */
+export function reorderCountsByOrderId(orders: OrderRow[]): Map<string, number> {
+  const byPhone = new Map<string, OrderRow[]>()
+  for (const order of orders) {
+    if (order.status === 'cancelled') continue
+    const phone = digitsOnly(order.recipient_phone ?? '')
+    if (!phone) continue
+    const list = byPhone.get(phone) ?? []
+    list.push(order)
+    byPhone.set(phone, list)
+  }
+
+  const counts = new Map<string, number>()
+  for (const list of byPhone.values()) {
+    const sorted = [...list].sort(
+      (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
+    )
+    sorted.forEach((order, index) => {
+      counts.set(order.id, index + 1)
+    })
+  }
+  return counts
+}
+
+export function toOrderListModel(
+  order: OrderRow,
+  opts?: { reorderCount?: number },
+): OrderListModel {
   const items = order.order_items ?? []
+  const reorderCount = opts?.reorderCount
   return {
     id: order.id,
     customerName: order.recipient_name,
@@ -76,5 +108,6 @@ export function toOrderListModel(order: OrderRow): OrderListModel {
     itemsAmount: order.total_amount - (order.shipping_fee ?? 0),
     depositDueAmount: order.deposit_due_amount,
     depositCode: order.deposit_code,
+    reorderCount: reorderCount && reorderCount >= 2 ? reorderCount : undefined,
   }
 }

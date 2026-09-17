@@ -3,6 +3,7 @@ import {
   autoCountFarmassi, loadFarms, loadFarmProducts, loadMonth, saveDay,
   type HistoryFarm,
 } from '../../lib/shippingHistory'
+import { loadDemoFarmOrders } from '../../lib/demoFarmOrders'
 import { isSundayYmd, shortHolidayName, useHolidays } from '../../lib/useHolidays'
 import { useUnsavedGuard } from '../../lib/useUnsavedGuard'
 import {
@@ -29,11 +30,16 @@ import { formatPrice } from '../../lib/format'
 /** 송장 대행 1건당 수익 (원) */
 const FEE_PER_SHIPMENT = 500
 
-/** 접수 채널 — 엑셀 행과 동일 */
+/** 접수 채널 — 엑셀 행과 동일. 관리자 화면 기준. */
 const CHANNELS = ['직접연락', '카톡 비즈니스', '팜어시'] as const
 type Channel = (typeof CHANNELS)[number]
 
+/** 농가 화면에서는 카톡 비즈니스를 직접연락에 합쳐 숨긴다. */
+const FARM_CHANNELS = ['직접연락', '팜어시'] as const satisfies readonly Channel[]
+
 const AUTO_CHANNEL: Channel = '팜어시'
+const KAKAO_CHANNEL: Channel = '카톡 비즈니스'
+const DIRECT_CHANNEL: Channel = '직접연락'
 
 interface FarmCell {
   count: number
@@ -123,11 +129,101 @@ function createEmptyDay(
 }
 
 
-function farmDayTotal(cells: Record<Channel, FarmCell> | undefined): number {
+function farmDayTotal(
+  cells: Record<Channel, FarmCell> | undefined,
+  channels: readonly Channel[] = CHANNELS,
+): number {
   // 농가가 아직 안 읽혔거나 새로 생긴 농가면 칸이 없다. 없으면 0 으로 본다 —
   // 여기서 터지면 페이지 전체가 흰 화면이 된다.
   if (!cells) return 0
-  return CHANNELS.reduce((sum, ch) => sum + (cells[ch]?.count ?? 0), 0)
+  return channels.reduce((sum, ch) => sum + (cells[ch]?.count ?? 0), 0)
+}
+
+/** 농가 화면용: 카톡 비즈니스 건수·접수번호를 직접연락에 합친다. */
+function mergeKakaoIntoDirect(day: DayRecord, farmIds: string[]): DayRecord {
+  const cells = { ...day.cells }
+  for (const farmId of farmIds) {
+    const farmCells = cells[farmId]
+    if (!farmCells) continue
+    const kakao = farmCells[KAKAO_CHANNEL] ?? emptyCell()
+    if (!kakao.count && !kakao.receiptText) {
+      cells[farmId] = { ...farmCells, [KAKAO_CHANNEL]: emptyCell() }
+      continue
+    }
+    const direct = farmCells[DIRECT_CHANNEL] ?? emptyCell()
+    const receiptParts = [direct.receiptText, kakao.receiptText].map((s) => s.trim()).filter(Boolean)
+    cells[farmId] = {
+      ...farmCells,
+      [DIRECT_CHANNEL]: {
+        count: direct.count + kakao.count,
+        receiptText: receiptParts.join(', '),
+      },
+      [KAKAO_CHANNEL]: emptyCell(),
+    }
+  }
+  return { ...day, cells }
+}
+
+/**
+ * 세션 더미 주문 → 팜어시 자동 건수·팔린 물건.
+ * created_at 서울 날짜 기준. 사람이 이미 적은 값은 덮지 않는다.
+ */
+function applyDemoFarmassi(
+  byDate: Map<string, DayRecord>,
+  farms: HistoryFarm[],
+  farmProducts: Record<string, { id: string; name: string }[]>,
+  monthPrefix: string,
+  /** 주면 더미 주문을 전부 이 날짜에 넣는다 (농가 화면·오늘). */
+  forceDate?: string,
+): Record<string, { id: string; name: string }[]> {
+  const nextProducts = { ...farmProducts }
+  for (const farm of farms) {
+    const demos = loadDemoFarmOrders(farm.id)
+    if (demos.length === 0) continue
+
+    const productList = [...(nextProducts[farm.id] ?? [])]
+    const ensureProduct = (name: string) => {
+      if (productList.some((p) => p.id === name || p.name === name)) return name
+      productList.push({ id: name, name })
+      return name
+    }
+
+    const byDayOrders = new Map<string, ReturnType<typeof loadDemoFarmOrders>>()
+    for (const order of demos) {
+      const date = forceDate
+        ?? new Date(order.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' })
+      if (!date.startsWith(monthPrefix)) continue
+      const list = byDayOrders.get(date) ?? []
+      list.push(order)
+      byDayOrders.set(date, list)
+    }
+
+    for (const [date, orders] of byDayOrders) {
+      const day = byDate.get(date) ?? createEmptyDay(date, farms, nextProducts)
+      const cells = (day.cells[farm.id] ??= emptyFarmCells())
+      if (cells[AUTO_CHANNEL].count === 0) {
+        cells[AUTO_CHANNEL] = { count: orders.length, receiptText: '' }
+      }
+      const qty = { ...(day.productQty[farm.id] ?? {}) }
+      if (productQtySum(qty) === 0) {
+        for (const order of orders) {
+          for (const item of order.order_items ?? []) {
+            const name = (item.product_name || '기타').trim()
+            const key = ensureProduct(name)
+            qty[key] = (qty[key] ?? 0) + (item.quantity ?? 0)
+          }
+        }
+        day.productQty = {
+          ...day.productQty,
+          [farm.id]: clampFarmProductQty(qty, farmDayTotal(cells)),
+        }
+      }
+      day.cells = { ...day.cells, [farm.id]: cells }
+      byDate.set(date, day)
+    }
+    nextProducts[farm.id] = productList
+  }
+  return nextProducts
 }
 
 function formatDisplayDate(iso: string): string {
@@ -189,6 +285,7 @@ async function downloadMonthExcel(
   farms: HistoryFarm[],
   /** 파일 이름에 붙일 농가 이름. 전체를 받을 때는 빈 문자열. */
   farmLabel = '',
+  channels: readonly Channel[] = CHANNELS,
 ) {
   if (monthDays.length === 0) throw new Error('다운로드할 이력이 없습니다.')
 
@@ -205,9 +302,9 @@ async function downloadMonthExcel(
     const [y, m, d] = day.date.split('-').map(Number)
     sheet.addRow([`${y}.${m}.${d}.`, ...farms.flatMap(() => ['', '']), ''])
 
-    for (const channel of CHANNELS) {
+    for (const channel of channels) {
       const dayGrand = farms.reduce(
-        (sum, farm) => sum + farmDayTotal(day.cells[farm.id]),
+        (sum, farm) => sum + farmDayTotal(day.cells[farm.id], channels),
         0,
       )
       const row: (string | number)[] = [channel]
@@ -255,10 +352,26 @@ const countInputClass =
 const receiptInputClass =
   'w-full min-w-[10rem] rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-muted outline-none focus:border-primary focus:ring-1 focus:ring-primary'
 
-export function AdminShippingHistory() {
+/**
+ * 배송이력 본문.
+ *
+ * 관리자는 전체 농가, 농가 워크스페이스는 scopedFarm 한 곳만 본다.
+ * AppShell 은 호출 쪽에서 감싼다 — 농가 레이아웃이 이미 셸을 쓰고 있다.
+ */
+export function ShippingHistoryContent({
+  scopedFarm,
+  backTo,
+}: {
+  scopedFarm?: HistoryFarm
+  backTo: string
+}) {
   const today = todayInSeoul()
+  const singleFarm = Boolean(scopedFarm)
+  /** 농가 페이지: 카톡 비즈니스 행 숨김. 관리자는 전체 채널. */
+  const visibleChannels: readonly Channel[] = singleFarm ? FARM_CHANNELS : CHANNELS
+  const scopedFarmId = scopedFarm?.id
   // 실데이터. 더미 상수는 첫 로딩 전 잠깐만 쓰인다.
-  const [farms, setFarms] = useState<HistoryFarm[]>([])
+  const [farms, setFarms] = useState<HistoryFarm[]>(scopedFarm ? [scopedFarm] : [])
   const [farmProducts, setFarmProducts] = useState<Record<string, { id: string; name: string }[]>>({})
   const [loadError, setLoadError] = useState('')
   const [viewYear, setViewYear] = useState(() => Number(today.slice(0, 4)))
@@ -277,8 +390,8 @@ export function AdminShippingHistory() {
     farmName: string
   } | null>(null)
   const [exportBusy, setExportBusy] = useState(false)
-  /** 엑셀로 내려받을 농가. 빈 문자열이면 전체. */
-  const [exportFarmId, setExportFarmId] = useState('')
+  /** 엑셀로 내려받을 농가. 빈 문자열이면 전체. 농가 화면은 자기 농가만. */
+  const [exportFarmId, setExportFarmId] = useState(scopedFarm?.id ?? '')
   const [exportError, setExportError] = useState('')
   /** 팔린 물건 전체 펼침 — `${date}:${farmId}` */
   const [expandedProducts, setExpandedProducts] = useState<Set<string>>(() => new Set())
@@ -295,6 +408,14 @@ export function AdminShippingHistory() {
     let alive = true
     void (async () => {
       try {
+        if (scopedFarm) {
+          setFarms([scopedFarm])
+          setExportFarmId(scopedFarm.id)
+          const p = await loadFarmProducts()
+          if (!alive) return
+          setFarmProducts({ [scopedFarm.id]: p[scopedFarm.id] ?? [] })
+          return
+        }
         const [f, p] = await Promise.all([loadFarms(), loadFarmProducts()])
         if (!alive) return
         setFarms(f)
@@ -304,7 +425,7 @@ export function AdminShippingHistory() {
       }
     })()
     return () => { alive = false }
-  }, [])
+  }, [scopedFarmId, scopedFarm])
 
   // 보고 있는 달과 겹치는 정지 구간만 가져온다. 지난 달을 볼 수도 있어서
   // '오늘 이후' 로 자르면 안 된다.
@@ -313,11 +434,13 @@ export function AdminShippingHistory() {
     void (async () => {
       const first = `${viewMonthKey}-01`
       const last = ymd(viewYear, viewMonth, daysInMonth(viewYear, viewMonth))
-      const { data } = await supabase
+      let query = supabase
         .from('shipping_pauses')
         .select('farm_id, start_date, end_date, reason')
         .lte('start_date', last)
         .gte('end_date', first)
+      if (scopedFarmId) query = query.eq('farm_id', scopedFarmId)
+      const { data } = await query
       if (!alive) return
       const byFarm: Record<string, PauseRange[]> = {}
       for (const row of (data ?? []) as any[]) {
@@ -326,44 +449,67 @@ export function AdminShippingHistory() {
       setPauses(byFarm)
     })()
     return () => { alive = false }
-  }, [viewYear, viewMonth, viewMonthKey])
+  }, [viewYear, viewMonth, viewMonthKey, scopedFarmId])
 
   // 달을 옮길 때마다 그 달 이력을 읽는다. 팜어시 채널은 저장된 값이 없으면
   // 주문 수로 채운다 — 사람이 고친 값은 덮지 않는다.
   useEffect(() => {
     if (farms.length === 0) return
     let alive = true
+
+    // API 가 느리거나 죽어도 1일~오늘 카드는 바로 깐다. 안 그러면
+    // '이력이 없습니다' 만 보이고 관리자 화면처럼 입력할 수 없다.
+    const seed = new Map<string, DayRecord>()
+    if (`${viewMonthKey}-01` <= today) {
+      const lastDay = Math.min(
+        daysInMonth(viewYear, viewMonth),
+        today.startsWith(viewMonthKey) ? Number(today.slice(8)) : daysInMonth(viewYear, viewMonth),
+      )
+      for (let d = 1; d <= lastDay; d += 1) {
+        const date = ymd(viewYear, viewMonth, d)
+        if (date > today) break
+        seed.set(date, createEmptyDay(date, farms, farmProducts))
+      }
+    }
+
+    // 농가 화면: 세션 더미 주문을 오늘 팜어시·팔린 물건에 바로 넣는다.
+    let productsForSeed = farmProducts
+    if (singleFarm) {
+      productsForSeed = applyDemoFarmassi(seed, farms, farmProducts, viewMonthKey, today)
+      const farmIds = farms.map((f) => f.id)
+      for (const [date, day] of [...seed.entries()]) {
+        seed.set(date, mergeKakaoIntoDirect(day, farmIds))
+      }
+    }
+    setDays([...seed.values()].sort((a, b) => b.date.localeCompare(a.date)))
+
     void (async () => {
       try {
         const [saved, auto] = await Promise.all([
-          loadMonth(viewYear, viewMonth, farms, farmProducts),
+          loadMonth(viewYear, viewMonth, farms, productsForSeed),
           autoCountFarmassi(viewYear, viewMonth),
         ])
         if (!alive) return
-        const byDate = new Map(saved.map((d) => [d.date, d]))
+        const byDate = new Map(seed)
+        const farmIdsList = farms.map((f) => f.id)
+        const farmIds = new Set(farmIdsList)
+        for (const day of saved) {
+          byDate.set(day.date, singleFarm ? mergeKakaoIntoDirect(day, farmIdsList) : day)
+        }
         for (const [date, perFarm] of Object.entries(auto)) {
           if (!date.startsWith(viewMonthKey)) continue
-          const day = byDate.get(date) ?? createEmptyDay(date, farms, farmProducts)
+          const day = byDate.get(date) ?? createEmptyDay(date, farms, productsForSeed)
           for (const [farmId, count] of Object.entries(perFarm)) {
+            if (!farmIds.has(farmId)) continue
             const cells = (day.cells[farmId] ??= emptyFarmCells())
             if (cells[AUTO_CHANNEL].count === 0) cells[AUTO_CHANNEL] = { count, receiptText: '' }
           }
-          byDate.set(date, day)
+          byDate.set(date, singleFarm ? mergeKakaoIntoDirect(day, farmIdsList) : day)
         }
-        // 이 달 1일부터 오늘까지는 저장된 값이 없어도 카드를 만든다.
-        //
-        // 오늘 것만 만들면 페이지가 생기기 전 날짜를 적을 수 없다. 실제로
-        // 8월 23~25일 이력을 적지 못하는 문제가 있었다. 지난 날짜는 그대로
-        // 잠겨 있어서 '수정' 을 눌러야 입력된다.
-        const lastDay = Math.min(
-          daysInMonth(viewYear, viewMonth),
-          today.startsWith(viewMonthKey) ? Number(today.slice(8)) : daysInMonth(viewYear, viewMonth),
-        )
-        if (`${viewMonthKey}-01` <= today) {
-          for (let d = 1; d <= lastDay; d += 1) {
-            const date = ymd(viewYear, viewMonth, d)
-            if (date > today) break
-            if (!byDate.has(date)) byDate.set(date, createEmptyDay(date, farms, farmProducts))
+        if (singleFarm) {
+          applyDemoFarmassi(byDate, farms, productsForSeed, viewMonthKey, today)
+          for (const [date, day] of [...byDate.entries()]) {
+            byDate.set(date, mergeKakaoIntoDirect(day, farmIdsList))
           }
         }
         setDays([...byDate.values()].sort((a, b) => b.date.localeCompare(a.date)))
@@ -372,7 +518,7 @@ export function AdminShippingHistory() {
       }
     })()
     return () => { alive = false }
-  }, [farms, farmProducts, viewYear, viewMonth, viewMonthKey])
+  }, [farms, farmProducts, viewYear, viewMonth, viewMonthKey, today, singleFarm])
 
   // 오늘이 속한 달로 맞춰 둔다 (월이 바뀌면 새 페이지)
   useEffect(() => {
@@ -448,7 +594,7 @@ export function AdminShippingHistory() {
     if (!day) return false
     setSavingDate(date)
     setLoadError('')
-    const err = await saveDay(date, day, farms, farmProducts)
+    const err = await saveDay(date, day, farms, farmProducts, visibleChannels)
     setSavingDate(null)
     if (err) {
       setLoadError(`저장하지 못했습니다: ${err}`)
@@ -597,6 +743,7 @@ export function AdminShippingHistory() {
       await downloadMonthExcel(
         viewYear, viewMonth, monthDays, picked,
         exportFarmId ? picked[0].name : '',
+        visibleChannels,
       )
     } catch (err) {
       setExportError(err instanceof Error ? err.message : '엑셀을 만들지 못했습니다.')
@@ -606,12 +753,16 @@ export function AdminShippingHistory() {
   }
 
   return (
-    <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
+    <>
       <Header
         title="배송이력 관리"
-        subtitle={`${viewYear}년 ${viewMonth}월`}
+        subtitle={
+          singleFarm && scopedFarm
+            ? `${scopedFarm.name} · ${viewYear}년 ${viewMonth}월`
+            : `${viewYear}년 ${viewMonth}월`
+        }
         showBack
-        backTo="/admin/shipments"
+        backTo={backTo}
       />
       <div className="px-4 py-4 md:px-6 max-w-6xl mx-auto space-y-4">
         <Card className="space-y-3">
@@ -719,17 +870,19 @@ export function AdminShippingHistory() {
             {viewYear}년 {viewMonth}월 송장 대행 이력
           </p>
           <div className="flex items-center gap-2">
-            <select
-              className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-primary"
-              value={exportFarmId}
-              onChange={(e) => setExportFarmId(e.target.value)}
-              aria-label="엑셀로 내려받을 농가"
-            >
-              <option value="">전체 농가</option>
-              {farms.map((farm) => (
-                <option key={farm.id} value={farm.id}>{farm.name}</option>
-              ))}
-            </select>
+            {!singleFarm && (
+              <select
+                className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-primary"
+                value={exportFarmId}
+                onChange={(e) => setExportFarmId(e.target.value)}
+                aria-label="엑셀로 내려받을 농가"
+              >
+                <option value="">전체 농가</option>
+                {farms.map((farm) => (
+                  <option key={farm.id} value={farm.id}>{farm.name}</option>
+                ))}
+              </select>
+            )}
             <Button
               type="button"
               size="sm"
@@ -947,7 +1100,7 @@ export function AdminShippingHistory() {
                     </tr>
                   </thead>
                   <tbody>
-                    {CHANNELS.map((channel) => {
+                    {visibleChannels.map((channel) => {
                       const isAuto = channel === AUTO_CHANNEL
                       return (
                         <tr
@@ -1081,8 +1234,14 @@ export function AdminShippingHistory() {
                         const qtyMap = day.productQty[farm.id] ?? {}
                         const allocated = productQtySum(qtyMap)
                         const remaining = Math.max(0, target - allocated)
+                        const catalog = farmProducts[farm.id] ?? []
                         const products = sortProductsByQty(
-                          farmProducts[farm.id] ?? [],
+                          [
+                            ...catalog,
+                            ...Object.keys(qtyMap)
+                              .filter((id) => !catalog.some((p) => p.id === id))
+                              .map((id) => ({ id, name: id })),
+                          ],
                           qtyMap,
                         )
                         const productExpandKey = `${day.date}:${farm.id}`
@@ -1254,6 +1413,14 @@ export function AdminShippingHistory() {
         onConfirm={confirmOffDayUnlock}
         onCancel={() => setOffDayUnlockTarget(null)}
       />
+    </>
+  )
+}
+
+export function AdminShippingHistory() {
+  return (
+    <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
+      <ShippingHistoryContent backTo="/admin/shipments" />
     </AppShell>
   )
 }

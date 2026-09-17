@@ -44,3 +44,9 @@ export async function isAdmin(admin: SupabaseClient, userId: string) {
   const { data } = await admin.from('profiles').select('role').eq('id', userId).maybeSingle()
   return data?.role === 'admin'
 }
+
+export async function isFarmMember(admin: SupabaseClient, userId: string, farmId: string) {
+  const { data } = await admin.from('farm_members')
+    .select('farm_id').eq('farm_id', farmId).eq('user_id', userId).maybeSingle()
+  return Boolean(data)
+}

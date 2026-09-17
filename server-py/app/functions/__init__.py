@@ -7,6 +7,7 @@ from .create_order import create_order
 from .farm_today_qty import farm_today_qty
 from .kpost_shipment import kpost_shipment
 from .match_deposit import match_deposit
+from .epost_address import epost_address
 from .naver_address import naver_address
 from .scrape_deposits import scrape_deposits
 from .send_push import send_push_fn
@@ -18,6 +19,7 @@ FUNCTIONS: dict[str, FnHandler] = {
     "bankda-ott": bankda_ott,
     "confirm-deposit": confirm_deposit,
     "create-order": create_order,
+    "epost-address": epost_address,
     "farm-today-qty": farm_today_qty,
     "kpost-shipment": kpost_shipment,
     "match-deposit": match_deposit,

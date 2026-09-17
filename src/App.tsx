@@ -19,12 +19,17 @@ import { AdminFarmLayout } from './lib/farmWorkspace'
 import { FarmDashboard } from './pages/farm/Dashboard'
 import { FarmOrders } from './pages/farm/Orders'
 import { FarmOrderCreate } from './pages/farm/OrderCreate'
+import { FarmCustomers } from './pages/farm/Customers'
+import { FarmDeposits } from './pages/farm/Deposits'
+import { FarmDepositLedger } from './pages/farm/DepositLedger'
 import { FarmDelivery } from './pages/farm/Delivery'
+import { FarmShippingHistory } from './pages/farm/ShippingHistory'
 import { FarmProducts } from './pages/farm/Products'
 import { FarmSettings } from './pages/farm/Settings'
 import { AdminDashboard } from './pages/admin/Dashboard'
 import { AdminFarms } from './pages/admin/Farms'
 import { AdminOrders } from './pages/admin/Orders'
+import { AdminCustomers } from './pages/admin/Customers'
 import { AdminDepositLedger } from './pages/admin/DepositLedger'
 import { AdminDeposits } from './pages/admin/Deposits'
 import { AdminShipments } from './pages/admin/Shipments'
@@ -53,6 +58,9 @@ export default function App() {
         <Route path="/farm" element={<RedirectToFarmWorkspace />} />
         <Route path="/farm/products" element={<RedirectToFarmWorkspace suffix="/products" />} />
         <Route path="/farm/orders" element={<RedirectToFarmWorkspace suffix="/orders" />} />
+        <Route path="/farm/customers" element={<RedirectToFarmWorkspace suffix="/customers" />} />
+        <Route path="/farm/deposits" element={<RedirectToFarmWorkspace suffix="/deposits" />} />
+        <Route path="/farm/deposits/ledger" element={<RedirectToFarmWorkspace suffix="/deposits/ledger" />} />
         <Route path="/farm/delivery" element={<RedirectToFarmWorkspace suffix="/delivery" />} />
         <Route path="/farm/settings" element={<RedirectToFarmWorkspace suffix="/settings" />} />
         <Route path="/farm/:farmSlug" element={<FarmStore />} />
@@ -133,7 +141,11 @@ export default function App() {
           <Route path="products" element={<FarmProducts />} />
           <Route path="orders" element={<FarmOrders />} />
           <Route path="orders/new" element={<FarmOrderCreate />} />
+          <Route path="customers" element={<FarmCustomers />} />
+          <Route path="deposits" element={<FarmDeposits />} />
+          <Route path="deposits/ledger" element={<FarmDepositLedger />} />
           <Route path="delivery" element={<FarmDelivery />} />
+          <Route path="delivery/history" element={<FarmShippingHistory />} />
           <Route path="settings" element={<FarmSettings />} />
         </Route>
         <Route path="/admin/products" element={<Navigate to="/admin/farms" replace />} />
@@ -142,6 +154,14 @@ export default function App() {
           element={
             <RequireAdmin>
               <AdminOrders />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/customers"
+          element={
+            <RequireAdmin>
+              <AdminCustomers />
             </RequireAdmin>
           }
         />
@@ -179,6 +199,9 @@ export default function App() {
         />
 
         <Route path="/orders" element={<RedirectToFarmWorkspace suffix="/orders" />} />
+        <Route path="/customers" element={<RedirectToFarmWorkspace suffix="/customers" />} />
+        <Route path="/deposits" element={<RedirectToFarmWorkspace suffix="/deposits" />} />
+        <Route path="/deposits/ledger" element={<RedirectToFarmWorkspace suffix="/deposits/ledger" />} />
         <Route path="/delivery" element={<RedirectToFarmWorkspace suffix="/delivery" />} />
         <Route path="/settings" element={<RedirectToFarmWorkspace suffix="/settings" />} />
         <Route path="*" element={<Navigate to="/" replace />} />
