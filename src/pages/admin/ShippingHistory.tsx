@@ -83,7 +83,9 @@ function emptyProductQty(
   return Object.fromEntries(
     farms.map((farm) => [
       farm.id,
-      Object.fromEntries((farmProducts[farm.id] ?? []).map((p) => [p.name, 0])),
+      // 화면 키는 상품 id 다 (bumpProductQty, loadMonth 와 같다). 이름으로 채우면 수량을
+      // 고칠 때 id 키가 따로 생겨, 저장할 때 같은 상품 이름이 두 번 upsert 된다.
+      Object.fromEntries((farmProducts[farm.id] ?? []).map((p) => [p.id, 0])),
     ]),
   )
 }
