@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 import base64
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import db
@@ -51,7 +51,9 @@ async def cors(request: Request, call_next):
     """
     origin = request.headers.get("origin")
     if request.method == "OPTIONS":
-        response = JSONResponse(None, status_code=204)
+        # 204 는 본문이 없어야 한다. JSONResponse(None) 은 "null" 4바이트를 실어서
+        # uvicorn 이 사전 요청마다 "Response content longer than Content-Length" 를 냈다.
+        response = Response(status_code=204)
     else:
         response = await call_next(request)
 
