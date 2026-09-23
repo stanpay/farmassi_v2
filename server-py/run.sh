@@ -23,5 +23,7 @@ set +a
 [ -n "$PORT_OVERRIDE" ] && PORT="$PORT_OVERRIDE"
 export PORT
 
+# WORKERS 로 워커 수를 정한다 (기본 1). 스케줄러는 워커 수와 상관없이 하나만 돈다 —
+# app/scheduler.py 의 advisory lock 참고. DB 연결은 워커마다 풀(앱 10 + 관리 4) + 1 이다.
 exec .venv/bin/python -m uvicorn app.main:app \
-  --host 127.0.0.1 --port "${PORT:-4310}" --no-access-log
+  --host 127.0.0.1 --port "${PORT:-4310}" --workers "${WORKERS:-1}" --no-access-log
