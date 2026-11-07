@@ -13,12 +13,7 @@ import { ConfirmDialog } from '../../components/ui/ConfirmDialog'
 import { ErrorText, PageSpinner } from '../../components/ui/Feedback'
 import { shippingFeeFor } from '../../lib/shippingFee'
 import { clearCart, getCart } from '../../lib/cart'
-import {
-  createDevBypassCheckoutFarm,
-  createDevBypassProducts,
-  ensureDevBypassCart,
-  isDevAuthBypass,
-} from '../../lib/devAuthBypass'
+import { isDevAuthBypass } from '../../lib/devAuthBypass'
 import { formatPrice } from '../../lib/format'
 import { invokeFunction } from '../../lib/functions'
 import {
@@ -107,17 +102,6 @@ export function Checkout() {
 
   useEffect(() => {
     async function load() {
-      if (isDevAuthBypass()) {
-        const farmData = createDevBypassCheckoutFarm(farmSlug)
-        const productRows = createDevBypassProducts(farmData.id)
-        ensureDevBypassCart(farmSlug, productRows)
-        setFarm(farmData)
-        setProducts(productRows)
-        setTodayQty(emptyTodayQty())
-        setLoading(false)
-        return
-      }
-
       const { data: farmRow } = await supabase.from('farms').select('*').eq('slug', farmSlug).maybeSingle()
       const farmData = farmRow as Farm | null
       setFarm(farmData)
@@ -133,7 +117,8 @@ export function Checkout() {
         setProducts((productRows as Product[]) ?? [])
         setTodayQty(qty)
       }
-      if (user) {
+      // 로그인 우회 세션(가짜 user id)으로는 저장된 주소를 조회하지 않는다.
+      if (user && !isDevAuthBypass()) {
         const { data: addrRows } = await supabase
           .from('saved_addresses')
           .select('*')

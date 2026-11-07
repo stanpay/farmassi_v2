@@ -7,8 +7,11 @@ from .create_order import create_order
 from .farm_today_qty import farm_today_qty
 from .kpost_shipment import kpost_shipment
 from .match_deposit import match_deposit
+from .match_farm_products import match_farm_products
 from .epost_address import epost_address
+from .juso_building import juso_building
 from .naver_address import naver_address
+from .parse_order_messages import parse_order_messages
 from .scrape_deposits import scrape_deposits
 from .send_push import send_push_fn
 from .types import FnCtx, FnHandler, FnResult, fail, ok
@@ -21,9 +24,12 @@ FUNCTIONS: dict[str, FnHandler] = {
     "create-order": create_order,
     "epost-address": epost_address,
     "farm-today-qty": farm_today_qty,
+    "juso-building": juso_building,
     "kpost-shipment": kpost_shipment,
     "match-deposit": match_deposit,
+    "match-farm-products": match_farm_products,
     "naver-address": naver_address,
+    "parse-order-messages": parse_order_messages,
     "scrape-deposits": scrape_deposits,
     "send-push": send_push_fn,
 }

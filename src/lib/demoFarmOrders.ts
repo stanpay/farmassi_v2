@@ -100,7 +100,10 @@ export type DemoDraftInput = {
   addressDetail?: string
   zonecode: string
   product: string
+  productId?: string | null
   quantity: number
+  senderName?: string
+  senderPhone?: string
   depositorName: string
   memo: string
   unitPrice: number
@@ -176,9 +179,12 @@ export function appendDemoFarmOrders(farmId: string, drafts: DemoDraftInput[]): 
       deposit_confirmed_at: null,
       deposit_confirmed_by: null,
       deposit_provider: null,
-      depositor_name: draft.depositorName || draft.recipientName,
-      sender_name: draft.depositorName || null,
-      sender_phone: null,
+      depositor_name:
+        draft.depositorName.trim() ||
+        draft.senderName?.trim() ||
+        draft.recipientName,
+      sender_name: draft.senderName?.trim() || null,
+      sender_phone: draft.senderPhone?.trim() || null,
       sender_address: null,
       sender_zonecode: null,
       sender_address_detail: null,
@@ -190,7 +196,7 @@ export function appendDemoFarmOrders(farmId: string, drafts: DemoDraftInput[]): 
         {
           id: `${orderId}-item`,
           order_id: orderId,
-          product_id: null,
+          product_id: draft.productId ?? null,
           product_name: draft.product,
           unit: null,
           unit_price: draft.unitPrice,

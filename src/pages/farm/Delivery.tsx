@@ -8,7 +8,6 @@ import { ShippingPausePanel } from '../../components/shared/ShippingPausePanel'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { loadDemoFarmOrders } from '../../lib/demoFarmOrders'
-import { isDevAuthBypass } from '../../lib/devAuthBypass'
 import { useFarmWorkspace } from '../../lib/farmWorkspace'
 import { toOrderListModel, type OrderRow } from '../../lib/orders'
 import { supabase } from '../../lib/supabase'
@@ -36,11 +35,6 @@ export function FarmDelivery() {
 
   async function loadOrders() {
     setDemoOrders(shipmentDemoOrders(farm.id))
-    // 백엔드 꺼진 로컬 bypass 에서는 API 호출하지 않는다(녹화용 연결 실패 토스트 방지)
-    if (isDevAuthBypass()) {
-      setDbOrders([])
-      return
-    }
     const { data } = await supabase
       .from('orders')
       .select(ORDER_SELECT)
@@ -52,10 +46,6 @@ export function FarmDelivery() {
 
   useEffect(() => {
     void (async () => {
-      if (isDevAuthBypass()) {
-        setPauses([])
-        return
-      }
       const { data } = await supabase
         .from('shipping_pauses').select('start_date, end_date, reason')
         .eq('farm_id', farm.id)

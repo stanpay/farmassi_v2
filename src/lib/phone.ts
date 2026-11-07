@@ -6,6 +6,38 @@ export function digitsOnly(value: string) {
   return value.replace(/\D/g, '')
 }
 
+/**
+ * 카톡에 흔한 표기를 숫자만인 휴대전화로 정규화한다.
+ * - `-` `~` 공백 등 구분자는 모두 제거
+ * - 8자리(국번+번호)만 있으면 `010` 보정
+ * - `10xxxxxxxx`(앞 0 누락)이면 `0` 보정
+ */
+export function normalizePhoneDigits(value: string): string {
+  let digits = digitsOnly(value)
+  if (!digits) return ''
+
+  if (digits.length === 8) digits = `010${digits}`
+  else if (digits.length === 7) digits = `010${digits}`
+  else if (digits.length === 10 && digits.startsWith('10')) digits = `0${digits}`
+
+  return digits
+}
+
+/** 저장·tel·고객 매칭용. 가능하면 `010-1234-5678` 형태. 불가하면 빈 문자열. */
+export function normalizePhone(value: string | null | undefined): string {
+  const raw = value?.trim() ?? ''
+  if (!raw) return ''
+  const digits = normalizePhoneDigits(raw)
+  if (digits.length < 10 || digits.length > 11) return ''
+  const parsed = parsePhone(digits)
+  if (parsed.mid.length < 3 || parsed.last.length !== 4) return ''
+  return composePhone(parsed.prefix, parsed.mid, parsed.last)
+}
+
+export function isNormalizedPhone(value: string | null | undefined): boolean {
+  return Boolean(normalizePhone(value))
+}
+
 export interface ParsedPhone {
   prefix: string
   mid: string
@@ -64,6 +96,8 @@ export function composePhone(prefix: string, mid: string, last: string) {
 export function formatPhone(value: string | null | undefined) {
   const raw = value?.trim() ?? ''
   if (!raw) return ''
-  const parsed = parsePhone(raw)
+  const normalized = normalizePhone(raw)
+  if (normalized) return normalized
+  const parsed = parsePhone(normalizePhoneDigits(raw) || raw)
   return composePhone(parsed.prefix, parsed.mid, parsed.last) || raw
 }

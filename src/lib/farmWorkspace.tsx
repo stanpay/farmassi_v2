@@ -5,7 +5,6 @@ import { PageSpinner } from '../components/ui/Feedback'
 import { farmNavItems } from '../config/farmNav'
 import type { Farm } from '../types/models'
 import { useAuth } from './auth'
-import { createDevBypassFarm, isDevAuthBypass } from './devAuthBypass'
 import { supabase } from './supabase'
 
 interface FarmWorkspaceValue {
@@ -33,15 +32,7 @@ export function AdminFarmLayout() {
     let cancelled = false
     setLoading(true)
 
-    if (isDevAuthBypass()) {
-      // API 가 죽어도 URL 의 farmId 로 화면만 본다.
-      setFarm(createDevBypassFarm(farmId))
-      setLoading(false)
-      return () => {
-        cancelled = true
-      }
-    }
-
+    // 로그인 우회여도 농가 데이터는 DB에서 읽는다. (더미 '초록빛 농장'으로 덮지 않음)
     supabase
       .from('farms')
       .select('*')
