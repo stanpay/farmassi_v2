@@ -74,6 +74,8 @@ export interface Farm {
   address_detail: string | null
   map_url: string | null
   share_text: string | null
+  /** 콜백문자 규칙·제외 번호. 자동 발신 스위치는 기기에만 있다. */
+  auto_sms?: Record<string, unknown>
   landing_blocks: FarmLandingBlock[]
   bank_name: string
   account_number: string

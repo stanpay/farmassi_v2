@@ -4,6 +4,9 @@ import { AppShell } from '../components/layout/AppShell'
 import { PageSpinner } from '../components/ui/Feedback'
 import { farmNavItems } from '../config/farmNav'
 import type { Farm } from '../types/models'
+import { isAutoSmsNative, loadAutoSmsConfig, saveAutoSmsConfig } from './autoSms'
+import { parseAutoSmsStored } from './callbackRules'
+import { resolveFarmShareText } from './farmShareText'
 import { useAuth } from './auth'
 import { supabase } from './supabase'
 
@@ -79,6 +82,23 @@ function FarmWorkspaceProvider({
     const { data } = await supabase.from('farms').select('*').eq('id', farmProp.id).maybeSingle()
     if (data) setFarm(data as Farm)
   }, [farmProp.id])
+
+  useEffect(() => {
+    if (!isAutoSmsNative()) return
+    let cancelled = false
+    void (async () => {
+      const message = resolveFarmShareText(farm)
+      const fromDb = parseAutoSmsStored(farm.auto_sms, message)
+      const device = await loadAutoSmsConfig(message)
+      if (cancelled) return
+      await saveAutoSmsConfig({ ...fromDb, master: device.master, message })
+    })()
+    return () => {
+      cancelled = true
+    }
+    // 객체 참조가 바뀌어도 내용이 같으면 다시 쓰지 않는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- farm 필드 중 문자에 쓰는 것만
+  }, [farm.id, farm.share_text, JSON.stringify(farm.auto_sms ?? {})])
 
   const value = useMemo<FarmWorkspaceValue>(
     () => ({ farm, basePath, isAdminView, refreshFarm }),

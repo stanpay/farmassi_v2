@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AlertCircle, Loader2, MessageSquare, Phone, Trash2, X } from 'lucide-react'
 import { Header } from '../../components/layout/Header'
 import { EpostAddressFixDialog } from '../../components/shared/EpostAddressFixDialog'
@@ -22,6 +22,7 @@ import { useFarmWorkspace } from '../../lib/farmWorkspace'
 import { appendDemoFarmOrders } from '../../lib/demoFarmOrders'
 import { matchFarmProduct } from '../../lib/matchFarmProduct'
 import { matchFarmProductsRemote } from '../../lib/matchFarmProductsRemote'
+import { clearSharedOrderText, peekSharedOrderText } from '../../lib/nativeShare'
 import { normalizePhone } from '../../lib/phone'
 import {
   parseOrderMessages,
@@ -1062,6 +1063,7 @@ function DraftOrderCard({
 export function FarmOrderCreate() {
   const { farm, basePath } = useFarmWorkspace()
   const navigate = useNavigate()
+  const location = useLocation()
   const [messageText, setMessageText] = useState('')
   const [drafts, setDrafts] = useState<DraftOrder[]>([])
   const [parsedSource, setParsedSource] = useState('')
@@ -1071,6 +1073,7 @@ export function FarmOrderCreate() {
   const [converting, setConverting] = useState(false)
   const [parseError, setParseError] = useState('')
   const [products, setProducts] = useState<Product[]>([])
+  const [productsLoaded, setProductsLoaded] = useState(false)
 
   // 들어올 때마다 비운다. 샘플 문구는 placeholder 로만 보여 준다.
   useEffect(() => {
@@ -1094,6 +1097,7 @@ export function FarmOrderCreate() {
         .order('sort_order')
       if (cancelled) return
       setProducts(((data as Product[]) ?? []).filter(isProductOrderable))
+      setProductsLoaded(true)
     })()
     return () => {
       cancelled = true
@@ -1153,9 +1157,23 @@ export function FarmOrderCreate() {
     }
   }, [drafts])
 
-  async function applyParse() {
+  // 안드로이드 앱에서 카톡·문자 공유로 들어온 글은 바로 넣고 변환한다.
+  // 상품 매칭에 카탈로그가 필요해 상품을 읽은 뒤 시작한다. 페이지에 있는 동안 새로 공유해도 location.key 가 바뀐다.
+  useEffect(() => {
+    if (!productsLoaded) return
+    const shared = peekSharedOrderText()
+    if (!shared.trim()) return
+    clearSharedOrderText()
+    setMessageText(shared)
+    setDrafts([])
+    setParsedSource('')
+    void applyParse(shared)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 공유가 들어올 때만 실행
+  }, [location.key, productsLoaded])
+
+  async function applyParse(source = messageText) {
     if (converting) return
-    const text = messageText.trim()
+    const text = source.trim()
     if (text.length < 2) {
       setParseError('주문 메시지를 입력해 주세요.')
       return

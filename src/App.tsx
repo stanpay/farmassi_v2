@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { ApiErrorNotice } from './components/shared/ApiErrorNotice'
 import { GoogleAnalytics } from './components/shared/GoogleAnalytics'
+import { NativeShareListener } from './components/shared/NativeShareListener'
 import { RedirectToFarmWorkspace, RequireAdmin, RequireAuth, RequireFarmWorkspace } from './components/auth/Guards'
 import { LoginSheetProvider } from './components/auth/LoginSheet'
 import { ProfileCompletionProvider } from './components/auth/ProfileCompletionProvider'
@@ -26,6 +27,7 @@ import { FarmDelivery } from './pages/farm/Delivery'
 import { FarmShippingHistory } from './pages/farm/ShippingHistory'
 import { FarmProducts } from './pages/farm/Products'
 import { FarmSettings } from './pages/farm/Settings'
+import { FarmAutoSms } from './pages/farm/AutoSms'
 import { AdminDashboard } from './pages/admin/Dashboard'
 import { AdminFarms } from './pages/admin/Farms'
 import { AdminOrders } from './pages/admin/Orders'
@@ -45,6 +47,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <GoogleAnalytics />
+      <NativeShareListener />
       <LoginSheetProvider>
         <ProfileCompletionProvider>
         <ApiErrorNotice />
@@ -58,10 +61,12 @@ export default function App() {
         <Route path="/farm" element={<RedirectToFarmWorkspace />} />
         <Route path="/farm/products" element={<RedirectToFarmWorkspace suffix="/products" />} />
         <Route path="/farm/orders" element={<RedirectToFarmWorkspace suffix="/orders" />} />
+        <Route path="/farm/orders/new" element={<RedirectToFarmWorkspace suffix="/orders/new" />} />
         <Route path="/farm/customers" element={<RedirectToFarmWorkspace suffix="/customers" />} />
         <Route path="/farm/deposits" element={<RedirectToFarmWorkspace suffix="/deposits" />} />
         <Route path="/farm/deposits/ledger" element={<RedirectToFarmWorkspace suffix="/deposits/ledger" />} />
         <Route path="/farm/delivery" element={<RedirectToFarmWorkspace suffix="/delivery" />} />
+        <Route path="/farm/auto-sms" element={<RedirectToFarmWorkspace suffix="/auto-sms" />} />
         <Route path="/farm/settings" element={<RedirectToFarmWorkspace suffix="/settings" />} />
         <Route path="/farm/:farmSlug" element={<FarmStore />} />
         <Route path="/farm/:farmSlug/landingpage" element={<FarmLanding />} />
@@ -146,6 +151,7 @@ export default function App() {
           <Route path="deposits/ledger" element={<FarmDepositLedger />} />
           <Route path="delivery" element={<FarmDelivery />} />
           <Route path="delivery/history" element={<FarmShippingHistory />} />
+          <Route path="auto-sms" element={<FarmAutoSms />} />
           <Route path="settings" element={<FarmSettings />} />
         </Route>
         <Route path="/admin/products" element={<Navigate to="/admin/farms" replace />} />
@@ -199,6 +205,8 @@ export default function App() {
         />
 
         <Route path="/orders" element={<RedirectToFarmWorkspace suffix="/orders" />} />
+        <Route path="/orders/new" element={<RedirectToFarmWorkspace suffix="/orders/new" />} />
+        <Route path="/auto-sms" element={<RedirectToFarmWorkspace suffix="/auto-sms" />} />
         <Route path="/customers" element={<RedirectToFarmWorkspace suffix="/customers" />} />
         <Route path="/deposits" element={<RedirectToFarmWorkspace suffix="/deposits" />} />
         <Route path="/deposits/ledger" element={<RedirectToFarmWorkspace suffix="/deposits/ledger" />} />

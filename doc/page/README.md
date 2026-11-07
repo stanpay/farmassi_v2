@@ -57,6 +57,7 @@
 | [주문](farm-orders.md) | `/admin/farms/:farmId/orders` |
 | [상품 관리](farm-products.md) | `/admin/farms/:farmId/products` |
 | [배송 설정](farm-delivery.md) | `/admin/farms/:farmId/delivery` |
+| [자동문자](../android.md) | `/admin/farms/:farmId/auto-sms` |
 | [설정](farm-settings.md) | `/admin/farms/:farmId/settings` |
 
 ## 양식
