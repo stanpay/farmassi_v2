@@ -171,9 +171,11 @@ export async function saveDay(
   day: HistoryDay,
   farms: HistoryFarm[],
   farmProducts: Record<string, { id: string; name: string }[]>,
+  /** 지정하면 이 채널만 저장. 농가 화면은 카톡 비즈니스를 건드리지 않는다. */
+  channels: readonly Channel[] = CHANNELS,
 ): Promise<string | null> {
   const cellRows = farms.flatMap((farm) =>
-    CHANNELS.map((channel) => {
+    channels.map((channel) => {
       const cell = day.cells[farm.id]?.[channel] ?? emptyCell()
       return {
         entry_date: date, farm_id: farm.id, channel,

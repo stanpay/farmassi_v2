@@ -174,6 +174,8 @@ export interface Order {
   sender_address_detail: string | null
   /** 주문 전체 배송비. total_amount 에 이미 포함돼 있다. */
   shipping_fee: number
+  /** 손님이 고른 출고일. null 이면 가장 이른 출고일에 나간다. */
+  requested_ship_date: string | null
   created_at: string
   updated_at: string
 }

@@ -1,14 +1,12 @@
 from ..sb import sb
 from ..shared.push import notify_farm_members
-from ..shared.util import is_admin, now_iso
+from ..shared.util import is_admin, is_farm_member, now_iso
 from .types import FnCtx, FnResult, fail, ok
 
 
 async def confirm_deposit(ctx: FnCtx) -> FnResult:
     if not ctx.user_id:
         return fail("로그인이 필요합니다.", 401)
-    if not await is_admin(ctx.admin, ctx.user_id):
-        return fail("관리자만 입금을 확인할 수 있습니다.", 403)
     if not ctx.body.get("orderId"):
         return fail("orderId가 필요합니다.")
 
@@ -19,6 +17,12 @@ async def confirm_deposit(ctx: FnCtx) -> FnResult:
         return fail("주문을 찾을 수 없습니다.", 404)
     if order["status"] != "pending_deposit":
         return fail("입금 대기 주문이 아닙니다.")
+
+    allowed = await is_admin(ctx.admin, ctx.user_id) or await is_farm_member(
+        ctx.admin, ctx.user_id, order["farm_id"]
+    )
+    if not allowed:
+        return fail("이 주문의 입금을 확인할 권한이 없습니다.", 403)
 
     update = await db.from_("orders").update({
         "status": "paid",

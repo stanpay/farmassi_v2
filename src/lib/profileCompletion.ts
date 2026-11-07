@@ -1,4 +1,4 @@
-import { composePhone, digitsOnly, parsePhone } from './phone'
+import { normalizePhone } from './phone'
 import type { Profile } from '../types/models'
 
 export const PROFILE_PENDING_KEY = 'farmassi-profile-pending'
@@ -26,13 +26,9 @@ export function isProfileNameValid(name: string) {
 }
 
 export function isProfilePhoneValid(phone: string) {
-  const digits = digitsOnly(phone)
-  if (digits.length < 10 || digits.length > 11) return false
-  const parsed = parsePhone(phone)
-  return parsed.mid.length >= 3 && parsed.last.length === 4
+  return Boolean(normalizePhone(phone))
 }
 
 export function normalizeProfilePhone(phone: string) {
-  const parsed = parsePhone(phone)
-  return composePhone(parsed.prefix, parsed.mid, parsed.last)
+  return normalizePhone(phone)
 }

@@ -17,6 +17,7 @@ import { normalizeTiers } from '../../lib/shippingFee'
 import { deletePublicImage, preparePublicImage, uploadFarmImage } from '../../lib/storageImages'
 import { PRODUCT_IMAGE_ASPECT } from '../../lib/imageCrop'
 import { supabase } from '../../lib/supabase'
+import { useAuth } from '../../lib/auth'
 import {
   PRODUCT_SALE_STATUS_LABEL,
   PRODUCT_SALE_STATUS_OPTIONS,
@@ -52,6 +53,8 @@ interface ProductFormValues {
   /** 수량 구간별 배송비 */
   shipping_fees: { qty: number; fee: number }[]
   unit: string
+  /** 저장돼 있던 원래 단위. kg 이 아니었으면 알려 주려고 들고 있는다. */
+  legacyUnit?: string
   description: string
   image_url: string
   parcel_weight_kg: string
@@ -117,6 +120,9 @@ function productToForm(product: Product): ProductFormValues {
     shipping_fees: normalizeTiers(product.shipping_fees),
     // 박스·개 등 비-kg 값은 택배 중량으로 바꿔 kg 숫자만 쓴다.
     unit: String(unitKg ?? (Number(parcel_weight_kg) || 5)),
+    // 원래 값이 kg 이 아니었으면 화면에서 알려 준다. 말없이 바꿔 저장하면
+    // '25개' 로 팔던 상품이 어느 순간 5kg 이 돼 있다.
+    legacyUnit: unitKg == null ? product.unit?.trim() || undefined : undefined,
     description: product.description ?? '',
     image_url: product.image_url ?? '',
     parcel_weight_kg,
@@ -229,9 +235,15 @@ function ProductFormCard({
           }}
           placeholder="예: 5"
         />
-        <p className="mt-1 text-xs text-muted">
-          kg 숫자만 입력합니다. &quot;박스&quot;·&quot;개&quot; 같은 값은 저장되지 않습니다.
-        </p>
+        {form.legacyUnit ? (
+          <p className="mt-1 text-xs text-amber-700">
+            원래 단위는 &quot;{form.legacyUnit}&quot; 였습니다. 저장하면 위의 kg 값으로 바뀝니다.
+          </p>
+        ) : (
+          <p className="mt-1 text-xs text-muted">
+            kg 숫자만 입력합니다. &quot;박스&quot;·&quot;개&quot; 같은 값은 저장되지 않습니다.
+          </p>
+        )}
       </div>
       <Textarea label="설명" value={form.description} onChange={(e) => onChange('description', e.target.value)} />
       <div className="grid grid-cols-2 gap-3">
@@ -531,6 +543,7 @@ interface ProductManagerProps {
 
 export function ProductManager({ farmId, variant = 'admin', onCountChange }: ProductManagerProps) {
   const isFarm = variant === 'farm'
+  const { isAdmin } = useAuth()
   const [products, setProducts] = useState<Product[]>([])
   const [form, setForm] = useState<ProductFormValues>(emptyProductForm)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -822,10 +835,18 @@ export function ProductManager({ farmId, variant = 'admin', onCountChange }: Pro
               <Plus className="h-4 w-4" />
               새 상품 추가
             </Button>
-            <Button type="button" variant="outline" disabled={reordering} onClick={() => setImportOpen(true)}>
-              <Import className="h-4 w-4" />
-              불러오기
-            </Button>
+            {/*
+              불러오기는 남의 농가 상품까지 훑는다. 농가 사람에게는 보이면
+              안 되므로 실제 권한(role=admin)으로 가른다. 농가 작업공간을
+              관리자가 열었을 때는 그대로 쓸 수 있어야 해서 variant 로는
+              가르지 않는다.
+            */}
+            {isAdmin && (
+              <Button type="button" variant="outline" disabled={reordering} onClick={() => setImportOpen(true)}>
+                <Import className="h-4 w-4" />
+                불러오기
+              </Button>
+            )}
           </div>
           {products.length > 1 && (
             <Button variant={reordering ? 'primary' : 'outline'} onClick={toggleReorder}>

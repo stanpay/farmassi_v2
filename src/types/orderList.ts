@@ -25,4 +25,6 @@ export interface OrderListModel {
   shippingFee?: number
   depositDueAmount?: number
   depositCode?: string | null
+  /** 같은 연락처 기준 N번째 주문(2 이상이면 재주문). 없으면 첫 주문 */
+  reorderCount?: number
 }

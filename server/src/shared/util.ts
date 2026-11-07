@@ -16,6 +16,12 @@ export async function isAdmin(db: Db, userId: string): Promise<boolean> {
   return data?.role === 'admin'
 }
 
+export async function isFarmMember(db: Db, userId: string, farmId: string): Promise<boolean> {
+  const { data } = await sb(db).from('farm_members')
+    .select('farm_id').eq('farm_id', farmId).eq('user_id', userId).maybeSingle()
+  return Boolean(data)
+}
+
 export function seoulDateCompact(date = new Date()): string {
   return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' }).replaceAll('-', '')
 }

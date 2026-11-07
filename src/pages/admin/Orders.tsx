@@ -1,9 +1,11 @@
+import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { AppShell } from '../../components/layout/AppShell'
 import { Header } from '../../components/layout/Header'
 import { FarmFilterChips } from '../../components/shared/FarmFilterChips'
 import { OrderItem } from '../../components/shared/OrderItem'
 import { OrderStatusFilterChips, type StatusFilterId } from '../../components/shared/OrderStatusFilterChips'
+import { Button } from '../../components/ui/Button'
 import { adminNavItems } from '../../config/adminNav'
 import { statusLabels } from '../../lib/orderStatus'
 import { farmsFromOrders, groupOrdersByFarm, toOrderListModel, type OrderRow } from '../../lib/orders'
@@ -49,6 +51,12 @@ export function AdminOrders() {
     <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
       <Header title="주문" subtitle={`${visible.length}건`} />
       <div className="px-4 py-4 md:px-6 max-w-5xl mx-auto space-y-4">
+        <div className="flex justify-end">
+          <Button type="button" size="sm" onClick={() => undefined}>
+            <Plus className="h-4 w-4" />
+            직접 추가하기
+          </Button>
+        </div>
         <div className="space-y-2">
           <FarmFilterChips farms={farms} selectedId={farmId} onSelect={setFarmId} allCount={orders.length} />
           <OrderStatusFilterChips orders={farmFiltered} selectedId={status} onSelect={setStatus} />
@@ -66,7 +74,25 @@ export function AdminOrders() {
                 key={order.id}
                 order={toOrderListModel(order)}
                 extra={
-                  <div className="mt-3">
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {/*
+                      출고일을 관리자가 고칠 수 있어야 한다. 손님이 미뤄 둔
+                      날짜를 앞당기거나, 농가 사정으로 미루는 일이 생긴다.
+                      비우면 가장 이른 출고일로 되돌아간다.
+                    */}
+                    <label className="flex items-center gap-1.5 text-xs text-muted">
+                      출고일
+                      <input
+                        type="date"
+                        className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs"
+                        value={order.requested_ship_date ?? ''}
+                        onChange={async (e) => {
+                          const next = e.target.value || null
+                          await supabase.from('orders').update({ requested_ship_date: next }).eq('id', order.id)
+                          await load()
+                        }}
+                      />
+                    </label>
                     <select
                       className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs"
                       value={order.status}

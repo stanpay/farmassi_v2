@@ -18,4 +18,11 @@ export const statusColors: Record<OrderStatus, string> = {
   cancelled: 'bg-red-50 text-red-600',
 }
 
-export const farmUpdatableStatuses: OrderStatus[] = ['packing', 'shipping', 'completed', 'cancelled']
+export const farmUpdatableStatuses: OrderStatus[] = [
+  'pending_deposit',
+  'paid',
+  'packing',
+  'shipping',
+  'completed',
+  'cancelled',
+]
