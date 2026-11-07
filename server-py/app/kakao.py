@@ -9,6 +9,7 @@
 import base64
 import hashlib
 import hmac
+import html
 import json
 from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit, parse_qsl
 
@@ -54,13 +55,57 @@ def unpack_state(state: str) -> str | None:
         return None
 
 
+APP_CALLBACK_SCHEME = "kr.farmassi.app"
+
+
+def _is_app_callback(url) -> bool:
+    """안드로이드 앱 카카오 로그인 콜백. Capacitor custom scheme."""
+    return (
+        url.scheme == APP_CALLBACK_SCHEME
+        and url.hostname == "auth"
+        and (url.path == "/callback" or url.path.startswith("/callback"))
+    )
+
+
+def is_app_callback_url(target: str) -> bool:
+    return _is_app_callback(urlparse(target))
+
+
+def app_handoff_html(target: str) -> str:
+    """카카오톡 인앱 브라우저는 커스텀 스킴 302 를 무시하는 경우가 있다."""
+    safe = html.escape(target, quote=True)
+    parsed = urlparse(target)
+    ssp = f"{parsed.hostname or 'auth'}{parsed.path}"
+    if parsed.query:
+        ssp += f"?{parsed.query}"
+    intent = (
+        f"intent://{ssp}#Intent;scheme={APP_CALLBACK_SCHEME};"
+        "package=kr.farmassi.app;end"
+    )
+    safe_intent = html.escape(intent, quote=True)
+    js_target = json.dumps(target)
+    js_intent = json.dumps(intent)
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<meta http-equiv='refresh' content='0;url={safe}'>"
+        "<title>팜어시</title></head><body>"
+        f"<script>location.replace({js_target});"
+        f"setTimeout(function(){{location.replace({js_intent})}},400)</script>"
+        f"<p><a href='{safe}'>앱으로 돌아가기</a></p>"
+        f"<p><a href='{safe_intent}'>앱이 안 열리면 여기를 누르세요</a></p>"
+        "</body></html>"
+    )
+
+
 def safe_redirect(raw: str | None) -> str:
-    """우리 사이트로만 돌려보낸다. 열린 리다이렉트 방지."""
+    """우리 사이트 또는 앱으로만 돌려보낸다. 열린 리다이렉트 방지."""
     fallback = f"{config.site_origin}/auth/callback"
     if not raw:
         return fallback
     try:
         url = urlparse(raw)
+        if _is_app_callback(url):
+            return raw
         if not url.scheme or not url.netloc:
             return fallback
         origin = f"{url.scheme}://{url.netloc}"

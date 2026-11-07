@@ -11,13 +11,14 @@ interface AutoSmsPlugin {
   getConfig(): Promise<{ config: AutoSmsConfig }>
   setConfig(options: { config: AutoSmsConfig }): Promise<void>
   getStatus(): Promise<AutoSmsStatus>
-  requestPermissions(): Promise<{ phone: string; sms: string }>
+  requestPermissions(options?: { permissions?: string[] }): Promise<{ phone: string; sms: string; contacts: string }>
   openOverlaySettings(): Promise<void>
   openBatteryOptimizationSettings(): Promise<void>
   getHistory(options?: { limit?: number }): Promise<{ items: AutoSmsHistoryItem[] }>
   clearHistory(): Promise<void>
   sendTest(options: { phone: string }): Promise<void>
   pickContact(): Promise<{ name?: string; phone?: string }>
+  listContacts(): Promise<{ items: AutoSmsExclusion[] }>
 }
 
 export interface AutoSmsStatus {
@@ -25,6 +26,7 @@ export interface AutoSmsStatus {
   sms: boolean
   overlay: boolean
   batteryUnrestricted: boolean
+  contacts?: boolean
 }
 
 export interface AutoSmsHistoryItem {
@@ -107,4 +109,21 @@ export async function pickExclusionContact(): Promise<AutoSmsExclusion | null> {
   const contact = await AutoSms.pickContact()
   if (!contact.phone) return null
   return { name: contact.name?.trim() || contact.phone, phone: contact.phone }
+}
+
+export async function requestContactsPermission() {
+  if (!isAutoSmsNative()) return
+  await AutoSms.requestPermissions({ permissions: ['contacts'] })
+}
+
+export async function listDeviceContacts(): Promise<AutoSmsExclusion[]> {
+  if (!isAutoSmsNative()) return []
+  const status = await AutoSms.getStatus()
+  if (!status.contacts) {
+    await requestContactsPermission()
+    const next = await AutoSms.getStatus()
+    if (!next.contacts) throw new Error('주소록 권한이 필요합니다.')
+  }
+  const { items } = await AutoSms.listContacts()
+  return items ?? []
 }

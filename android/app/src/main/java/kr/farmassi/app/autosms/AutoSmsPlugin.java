@@ -24,6 +24,7 @@ import com.getcapacitor.annotation.Permission;
     permissions = {
         @Permission(alias = "phone", strings = { Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_CALL_LOG }),
         @Permission(alias = "sms", strings = { Manifest.permission.SEND_SMS }),
+        @Permission(alias = "contacts", strings = { Manifest.permission.READ_CONTACTS }),
     }
 )
 public class AutoSmsPlugin extends Plugin {
@@ -60,6 +61,7 @@ public class AutoSmsPlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("phone", getPermissionState("phone") == PermissionState.GRANTED);
         result.put("sms", getPermissionState("sms") == PermissionState.GRANTED);
+        result.put("contacts", getPermissionState("contacts") == PermissionState.GRANTED);
         result.put("overlay", Settings.canDrawOverlays(getContext()));
         result.put("batteryUnrestricted", power.isIgnoringBatteryOptimizations(getContext().getPackageName()));
         call.resolve(result);
@@ -127,6 +129,57 @@ public class AutoSmsPlugin extends Plugin {
         String text = SmsSender.fill(config.message, CallEvent.TEST, digits, System.currentTimeMillis());
         SmsSender.send(getContext(), digits, text, CallEvent.TEST, "테스트 발송");
         call.resolve();
+    }
+
+    /** 휴대폰 번호만, 같은 번호는 한 번만. 이름순. */
+    @PluginMethod
+    public void listContacts(PluginCall call) {
+        if (getPermissionState("contacts") != PermissionState.GRANTED) {
+            call.reject("주소록 권한이 없습니다.");
+            return;
+        }
+        String[] projection = {
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER,
+        };
+        java.util.LinkedHashMap<String, String> unique = new java.util.LinkedHashMap<>();
+        try (
+            Cursor cursor = getContext()
+                .getContentResolver()
+                .query(
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    projection,
+                    null,
+                    null,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " COLLATE LOCALIZED ASC"
+                )
+        ) {
+            if (cursor != null) {
+                while (cursor.moveToNext()) {
+                    String digits = PhoneNumbers.normalize(cursor.getString(1));
+                    if (!PhoneNumbers.isMobile(digits) || unique.containsKey(digits)) continue;
+                    String name = cursor.getString(0);
+                    unique.put(digits, name == null || name.trim().isEmpty() ? digits : name.trim());
+                }
+            }
+        } catch (Exception e) {
+            call.reject("주소록을 읽지 못했습니다.", e);
+            return;
+        }
+        try {
+            JSArray items = new JSArray();
+            for (java.util.Map.Entry<String, String> entry : unique.entrySet()) {
+                JSObject row = new JSObject();
+                row.put("name", entry.getValue());
+                row.put("phone", entry.getKey());
+                items.put(row);
+            }
+            JSObject result = new JSObject();
+            result.put("items", items);
+            call.resolve(result);
+        } catch (Exception e) {
+            call.reject("주소록을 읽지 못했습니다.", e);
+        }
     }
 
     /** 주소록에서 한 명을 고른다. 고른 연락처만 읽으므로 주소록 권한은 필요 없다. */

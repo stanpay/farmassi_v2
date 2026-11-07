@@ -12,7 +12,13 @@ const config: CapacitorConfig = {
     url: serverUrl,
     cleartext: serverUrl.startsWith('http://'),
     // 여기 없는 주소로 이동하면 앱 밖 브라우저가 열려 로그인 콜백이 앱으로 돌아오지 못한다.
-    allowNavigation: ['farmassi.kr', '*.farmassi.kr', '*.kakao.com'],
+    allowNavigation: [
+      'farmassi.kr',
+      '*.farmassi.kr',
+      'kakao.com',
+      '*.kakao.com',
+      '*.daum.net',
+    ],
   },
   android: {
     allowMixedContent: false,

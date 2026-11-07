@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Capacitor } from '@capacitor/core'
 import {
   AlertTriangle,
   BatteryCharging,
@@ -26,8 +25,10 @@ import {
   loadAutoSmsStatus,
   openBatteryOptimizationSettings,
   openOverlaySettings,
+  listDeviceContacts,
   pickExclusionContact,
   requestAutoSmsPermissions,
+  requestContactsPermission,
   saveAutoSmsConfig,
   sendAutoSmsTest,
   type AutoSmsHistoryItem,
@@ -54,7 +55,7 @@ import {
 } from '../../lib/callbackRules'
 import { useFarmWorkspace } from '../../lib/farmWorkspace'
 import { resolveFarmShareText, type FarmShareInput } from '../../lib/farmShareText'
-import { normalizePhone, normalizePhoneDigits } from '../../lib/phone'
+import { formatPhone, normalizePhone, normalizePhoneDigits } from '../../lib/phone'
 import { supabase } from '../../lib/supabase'
 
 const HISTORY_STATUS: Record<AutoSmsHistoryItem['status'], string> = {
@@ -159,6 +160,11 @@ export function FarmAutoSms() {
   const [testPhone, setTestPhone] = useState('')
   const [exclusionPhone, setExclusionPhone] = useState('')
   const [exclusionName, setExclusionName] = useState('')
+  const [contactPickerOpen, setContactPickerOpen] = useState(false)
+  const [deviceContacts, setDeviceContacts] = useState<Array<{ name: string; phone: string }>>([])
+  const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set())
+  const [contactQuery, setContactQuery] = useState('')
+  const [contactsLoading, setContactsLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -291,6 +297,57 @@ export function FarmAutoSms() {
     setError('')
   }
 
+  async function openContactPicker() {
+    if (!config || !native) return
+    setError('')
+    setContactsLoading(true)
+    setContactPickerOpen(true)
+    setContactQuery('')
+    try {
+      const items = await listDeviceContacts()
+      setDeviceContacts(items)
+      setSelectedContacts(new Set(items.filter((row) => config.exclusions.some((ex) => ex.phone === row.phone)).map((row) => row.phone)))
+      await refreshNative()
+    } catch (err) {
+      setContactPickerOpen(false)
+      setError(err instanceof Error ? err.message : '주소록을 읽지 못했습니다.')
+    } finally {
+      setContactsLoading(false)
+    }
+  }
+
+  async function excludeAllContacts() {
+    if (!config || !native) return
+    setError('')
+    setContactsLoading(true)
+    try {
+      const items = await listDeviceContacts()
+      const already = new Set(config.exclusions.map((row) => row.phone))
+      const extra = items.filter((row) => !already.has(row.phone))
+      if (extra.length === 0) {
+        setMessage(items.length === 0 ? '주소록에 휴대폰 번호가 없습니다.' : '주소록 번호는 이미 모두 제외되어 있습니다.')
+        return
+      }
+      await persistConfig({ ...config, exclusions: [...config.exclusions, ...extra] })
+      setMessage(`주소록 ${extra.length}명을 제외했습니다.`)
+      await refreshNative()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '주소록을 읽지 못했습니다.')
+    } finally {
+      setContactsLoading(false)
+    }
+  }
+
+  async function applyContactSelection() {
+    if (!config) return
+    const inBook = new Set(deviceContacts.map((row) => row.phone))
+    const kept = config.exclusions.filter((row) => !inBook.has(row.phone))
+    const picked = deviceContacts.filter((row) => selectedContacts.has(row.phone))
+    await persistConfig({ ...config, exclusions: [...kept, ...picked] })
+    setContactPickerOpen(false)
+    setMessage(`제외 번호를 ${picked.length}명으로 맞췄습니다.`)
+  }
+
   return (
     <>
       <Header title="자동문자" subtitle={farm.name} />
@@ -357,6 +414,12 @@ export function FarmAutoSms() {
                 label="다른 앱 위에 표시"
                 action="설정 열기"
                 onClick={() => void openOverlaySettings()}
+              />
+              <StatusRow
+                ok={Boolean(status.contacts)}
+                label="주소록"
+                action="권한 허용"
+                onClick={() => void requestContactsPermission().then(refreshNative)}
               />
               <StatusRow
                 ok={status.batteryUnrestricted}
@@ -517,7 +580,22 @@ export function FarmAutoSms() {
             {tab === 'exclusions' ? (
               <Card className="space-y-3">
                 <h3 className="font-semibold">제외 번호</h3>
-                <p className="text-xs text-muted">지역번호와 070은 자동으로 보내지 않습니다. 여기에는 휴대폰만 넣으면 됩니다.</p>
+                <p className="text-xs text-muted">
+                  지역번호와 070은 자동으로 보내지 않습니다. 주소록에 있는 사람에게는 보내지 않으려면 아래에서 고르면
+                  됩니다.
+                </p>
+                {native ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" disabled={contactsLoading} onClick={() => void openContactPicker()}>
+                      {contactsLoading ? '불러오는 중…' : '주소록에서 고르기'}
+                    </Button>
+                    <Button type="button" variant="ghost" disabled={contactsLoading} onClick={() => void excludeAllContacts()}>
+                      주소록 모두 제외
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted">주소록 목록은 안드로이드 앱에서 불러올 수 있습니다. 웹에서는 번호를 직접 넣을 수 있습니다.</p>
+                )}
                 <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto] md:items-end">
                   <Input label="이름" value={exclusionName} onChange={(e) => setExclusionName(e.target.value)} />
                   <PhoneField label="번호" value={exclusionPhone} onChange={setExclusionPhone} />
@@ -525,7 +603,7 @@ export function FarmAutoSms() {
                     <Button type="button" variant="outline" onClick={() => void addExclusion()}>
                       추가
                     </Button>
-                    {Capacitor.isNativePlatform() ? (
+                    {native ? (
                       <Button
                         type="button"
                         variant="ghost"
@@ -536,7 +614,7 @@ export function FarmAutoSms() {
                           setExclusionPhone(contact.phone)
                         }}
                       >
-                        주소록
+                        한 명 고르기
                       </Button>
                     ) : null}
                   </div>
@@ -601,6 +679,27 @@ export function FarmAutoSms() {
           </>
         ) : null}
       </div>
+
+      {contactPickerOpen ? (
+        <ContactPicker
+          loading={contactsLoading}
+          contacts={deviceContacts}
+          selected={selectedContacts}
+          query={contactQuery}
+          onQuery={setContactQuery}
+          onToggle={(phone) => {
+            setSelectedContacts((prev) => {
+              const next = new Set(prev)
+              if (next.has(phone)) next.delete(phone)
+              else next.add(phone)
+              return next
+            })
+          }}
+          onSelectVisible={(phones) => setSelectedContacts(new Set(phones))}
+          onCancel={() => setContactPickerOpen(false)}
+          onSave={() => void applyContactSelection()}
+        />
+      ) : null}
 
       {editing ? (
         <RuleEditor
@@ -797,6 +896,102 @@ function RuleEditor({
           </Button>
           <Button type="button" fullWidth onClick={onSave} disabled={rule.events.length === 0 || rule.days.length === 0}>
             저장
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ContactPicker({
+  loading,
+  contacts,
+  selected,
+  query,
+  onQuery,
+  onToggle,
+  onSelectVisible,
+  onCancel,
+  onSave,
+}: {
+  loading: boolean
+  contacts: Array<{ name: string; phone: string }>
+  selected: Set<string>
+  query: string
+  onQuery: (value: string) => void
+  onToggle: (phone: string) => void
+  onSelectVisible: (phones: string[]) => void
+  onCancel: () => void
+  onSave: () => void
+}) {
+  const needle = query.trim().toLowerCase()
+  const visible = contacts.filter((row) => {
+    if (!needle) return true
+    return row.name.toLowerCase().includes(needle) || row.phone.includes(needle.replace(/\D/g, ''))
+  })
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center md:items-center p-0 md:p-4">
+      <button type="button" className="absolute inset-0 bg-black/40" aria-label="닫기" onClick={onCancel} />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="contact-picker-title"
+        className="relative w-full max-w-lg max-h-[90dvh] flex flex-col overflow-hidden rounded-t-2xl md:rounded-2xl bg-white p-5 shadow-lg"
+      >
+        <h2 id="contact-picker-title" className="text-lg font-bold">
+          주소록에서 고르기
+        </h2>
+        <p className="mt-1 text-sm text-muted">체크한 사람에게는 콜백문자를 보내지 않습니다. 휴대폰 번호만 나옵니다.</p>
+        <Input
+          label="검색"
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+          placeholder="이름 또는 번호"
+        />
+        <div className="mt-2 flex items-center justify-between text-sm">
+          <span className="text-muted">
+            {loading ? '불러오는 중…' : `${selected.size}명 선택 · ${visible.length}명 표시`}
+          </span>
+          <Button type="button" size="sm" variant="ghost" onClick={() => onSelectVisible(visible.map((row) => row.phone))}>
+            보이는 번호 모두 선택
+          </Button>
+        </div>
+        <ul className="mt-2 min-h-0 flex-1 overflow-y-auto divide-y divide-gray-100">
+          {visible.map((row) => {
+            const checked = selected.has(row.phone)
+            return (
+              <li key={row.phone}>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 px-1 py-2.5 text-left"
+                  onClick={() => onToggle(row.phone)}
+                >
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
+                      checked ? 'border-primary bg-primary text-white' : 'border-gray-300 bg-white'
+                    }`}
+                  >
+                    {checked ? <Check className="h-3.5 w-3.5" /> : null}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium">{row.name}</span>
+                    <span className="block text-xs text-muted">{formatPhone(row.phone) || row.phone}</span>
+                  </span>
+                </button>
+              </li>
+            )
+          })}
+          {!loading && visible.length === 0 ? (
+            <li className="px-1 py-6 text-sm text-muted">해당하는 연락처가 없습니다.</li>
+          ) : null}
+        </ul>
+        <div className="mt-4 flex gap-2">
+          <Button type="button" variant="ghost" fullWidth onClick={onCancel}>
+            취소
+          </Button>
+          <Button type="button" fullWidth disabled={loading} onClick={onSave}>
+            제외 목록에 반영
           </Button>
         </div>
       </div>

@@ -19,6 +19,10 @@ import {
 import { formatPrice } from '../../lib/format'
 import { checkAddressDetail } from '../../lib/jusoBuilding'
 import { useFarmWorkspace } from '../../lib/farmWorkspace'
+import {
+  appendAndDownloadDraftSourceDiffCsv,
+  diffDraftSource,
+} from '../../lib/draftSourceDiff'
 import { appendDemoFarmOrders } from '../../lib/demoFarmOrders'
 import { matchFarmProduct } from '../../lib/matchFarmProduct'
 import { matchFarmProductsRemote } from '../../lib/matchFarmProductsRemote'
@@ -813,16 +817,17 @@ function DraftOrderCard({
   )
   const productError = Boolean(draft.fieldErrors.product)
 
-  // 원본 메시지는 읽기 전용 하이라이트만. 수정은 오른쪽 추출 결과에서.
+  // 원본 하이라이트도 추출 결과와 같이 눌러 수정한다.
   const toFieldRanges = (matches: FieldMatch[]): TextRange[] =>
     matches.map((match) => {
-      const errorMessage = draft.fieldErrors[match.key]
-      const isError = Boolean(errorMessage) && !(match.key === 'address' && draft.addressChecking)
+      const hi = fieldHighlightClass(match.key, draft.fieldErrors, draft.addressChecking)
       return {
         start: match.start,
         end: match.end,
-        className: isError ? FIELD_ERROR_CLASS : FIELD_META[match.key].className,
-        title: isError ? errorMessage : FIELD_META[match.key].label,
+        className: hi.className,
+        title: hi.title,
+        interactive: true,
+        onClick: () => onFixField(match.key),
       }
     })
   const fieldRanges = toFieldRanges(draft.matches)
@@ -1111,6 +1116,7 @@ export function FarmOrderCreate() {
   const errorCount = drafts.filter(
     (row) => !row.addressChecking && Object.keys(row.fieldErrors).length > 0,
   ).length
+  const addressChecking = drafts.some((row) => row.addressChecking)
 
   const unmatchedOrderRanges = useMemo(
     () => findUnmatchedOrderRanges(parsedSource, drafts, ignoredSpans),
@@ -1409,8 +1415,20 @@ export function FarmOrderCreate() {
           </Button>
           <Button
             type="button"
-            disabled={drafts.length === 0 || errorCount > 0}
+            disabled={drafts.length === 0 || errorCount > 0 || addressChecking}
             onClick={() => {
+              const diffRows = drafts.flatMap((draft, index) =>
+                diffDraftSource({
+                  ...draft,
+                  depositorName: resolveDepositorName(draft),
+                }).map((diff) => ({
+                  index: index + 1,
+                  recipientName: draft.recipientName.trim() || `${index + 1}번`,
+                  ...diff,
+                })),
+              )
+              appendAndDownloadDraftSourceDiffCsv(diffRows)
+
               appendDemoFarmOrders(
                 farm.id,
                 drafts.map((draft) => ({

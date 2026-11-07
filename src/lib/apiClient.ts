@@ -282,8 +282,9 @@ export const supabase = {
       options: { provider: string; options?: { redirectTo?: string; scopes?: string } },
     ): Promise<{ error: ApiError | null }> {
       const redirect = options.options?.redirectTo ?? `${window.location.origin}/auth/callback`
-      window.location.href =
-        `${API}/auth/${options.provider}/start?redirect=${encodeURIComponent(redirect)}`
+      const start = `${API}/auth/${options.provider}/start?redirect=${encodeURIComponent(redirect)}`
+      // 앱 WebView 안에서 카카오 동의 화면까지 진행한다. 허용 목록에 없는 주소는 바깥 브라우저가 연다.
+      window.location.assign(start)
       return { error: null }
     },
 
