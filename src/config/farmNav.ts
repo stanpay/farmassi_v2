@@ -1,4 +1,4 @@
-import { Boxes, CreditCard, LayoutDashboard, Package, Settings, Truck, Users } from 'lucide-react'
+import { Boxes, CreditCard, LayoutDashboard, MessageSquareText, Package, Settings, Truck, Users } from 'lucide-react'
 import type { NavItem } from '../components/layout/BottomNav'
 
 export function farmNavItems(basePath: string): NavItem[] {
@@ -9,6 +9,7 @@ export function farmNavItems(basePath: string): NavItem[] {
     { to: `${basePath}/customers`, label: '고객', icon: Users },
     { to: `${basePath}/deposits`, label: '입금', icon: CreditCard },
     { to: `${basePath}/delivery`, label: '송장', icon: Truck },
+    { to: `${basePath}/auto-sms`, label: '자동문자', icon: MessageSquareText },
     { to: `${basePath}/settings`, label: '설정', icon: Settings },
   ]
 }

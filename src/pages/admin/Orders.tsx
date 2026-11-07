@@ -1,11 +1,9 @@
-import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { AppShell } from '../../components/layout/AppShell'
 import { Header } from '../../components/layout/Header'
 import { FarmFilterChips } from '../../components/shared/FarmFilterChips'
 import { OrderItem } from '../../components/shared/OrderItem'
 import { OrderStatusFilterChips, type StatusFilterId } from '../../components/shared/OrderStatusFilterChips'
-import { Button } from '../../components/ui/Button'
 import { adminNavItems } from '../../config/adminNav'
 import { statusLabels } from '../../lib/orderStatus'
 import { farmsFromOrders, groupOrdersByFarm, toOrderListModel, type OrderRow } from '../../lib/orders'
@@ -51,12 +49,6 @@ export function AdminOrders() {
     <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
       <Header title="주문" subtitle={`${visible.length}건`} />
       <div className="px-4 py-4 md:px-6 max-w-5xl mx-auto space-y-4">
-        <div className="flex justify-end">
-          <Button type="button" size="sm" onClick={() => undefined}>
-            <Plus className="h-4 w-4" />
-            직접 추가하기
-          </Button>
-        </div>
         <div className="space-y-2">
           <FarmFilterChips farms={farms} selectedId={farmId} onSelect={setFarmId} allCount={orders.length} />
           <OrderStatusFilterChips orders={farmFiltered} selectedId={status} onSelect={setStatus} />

@@ -7,6 +7,7 @@ import {
 } from './devAuthBypass'
 import type { Farm, FarmMemberRole, Profile } from '../types/models'
 import type { Session, User } from './apiClient'
+import { kakaoRedirectTo } from './nativeAuthRedirect'
 
 interface FarmMembership {
   farm_id: string
@@ -117,10 +118,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithKakao = useCallback(async (next?: string) => {
     if (isDevAuthBypass()) return
     if (next) sessionStorage.setItem('farmassi-next', next)
+    const redirect = new URL(kakaoRedirectTo())
+    if (next) redirect.searchParams.set('next', next)
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'kakao',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: redirect.toString(),
         scopes: 'profile_nickname profile_image',
       },
     })

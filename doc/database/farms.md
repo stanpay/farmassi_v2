@@ -40,6 +40,7 @@
 | `address` | text | 예 |  |  |
 | `map_url` | text | 예 |  |  |
 | `share_text` | text | 예 |  |  |
+| `auto_sms` | jsonb | 아니오 | `'{}'::jsonb` | 콜백문자 규칙·제외 번호. 자동 발신 스위치는 기기에만 둔다. |
 | `address_zonecode` | text | 예 |  |  |
 | `address_detail` | text | 예 |  |  |
 | `is_listed` | boolean | 아니오 | `true` | 메인 농가 목록 노출 여부. false 여도 slug 주소로는 접속된다. |
@@ -57,6 +58,7 @@
 - `farms_daily_qty_limit_check` — `CHECK ((daily_qty_limit >= 1))`
 - `farms_delivery_days_check` — `CHECK (((delivery_days <@ ARRAY[(0)::smallint, (1)::smallint, (2)::smallint, (3)::smallint, (4)::smallint, (5)::smallint, (6)::smallint]) AND (array_length(delivery_days, 1) IS DISTINCT FROM 0)))`
 - `farms_landing_blocks_is_array` — `CHECK ((jsonb_typeof(landing_blocks) = 'array'::text))`
+- `farms_auto_sms_is_object` — `CHECK ((jsonb_typeof(auto_sms) = 'object'::text))`
 
 ## 인덱스
 
@@ -83,6 +85,7 @@
 - [`supabase/migrations/20260824000007_qty_limits.sql`](../../supabase/migrations/20260824000007_qty_limits.sql)
 - [`supabase/migrations/20260825000000_shipping_pauses.sql`](../../supabase/migrations/20260825000000_shipping_pauses.sql)
 - [`supabase/migrations/20260825000002_shipping_history.sql`](../../supabase/migrations/20260825000002_shipping_history.sql)
+- [`supabase/migrations/20261108000000_farms_auto_sms.sql`](../../supabase/migrations/20261108000000_farms_auto_sms.sql)
 
 ## 쓰는 곳
 

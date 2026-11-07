@@ -34,17 +34,48 @@ function unpackState(state: string): string | null {
   return Buffer.from(payload, 'base64url').toString('utf8')
 }
 
-/** 우리 사이트로만 돌려보낸다. 열린 리다이렉트 방지. */
+/** 안드로이드 앱 카카오 로그인 콜백. Capacitor custom scheme. */
+const APP_CALLBACK_PROTOCOL = 'kr.farmassi.app:'
+
+function isAppCallback(url: URL): boolean {
+  return url.protocol === APP_CALLBACK_PROTOCOL && url.hostname === 'auth' && url.pathname.startsWith('/callback')
+}
+
+/** 우리 사이트 또는 앱으로만 돌려보낸다. 열린 리다이렉트 방지. */
 function safeRedirect(raw: string | null): string {
   const fallback = `${config.siteOrigin}/auth/callback`
   if (!raw) return fallback
   try {
     const url = new URL(raw)
+    if (isAppCallback(url)) return url.toString()
     const allowed = config.siteOrigins.includes(url.origin) || url.hostname === 'localhost'
     return allowed ? url.toString() : fallback
   } catch {
     return fallback
   }
+}
+
+/** 카카오톡 인앱 브라우저는 커스텀 스킴 302 를 무시하는 경우가 있다. */
+function sendClientRedirect(res: ServerResponse, target: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(target)
+  } catch {
+    res.writeHead(302, { Location: `${config.siteOrigin}/auth/callback` }).end()
+    return
+  }
+  if (!isAppCallback(parsed)) {
+    res.writeHead(302, { Location: target }).end()
+    return
+  }
+  const ssp = `${parsed.hostname}${parsed.pathname}${parsed.search}`
+  const intent = `intent://${ssp}#Intent;scheme=kr.farmassi.app;package=kr.farmassi.app;end`
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${escapeHtml(target)}"><title>팜어시</title></head><body><script>location.replace(${JSON.stringify(target)});setTimeout(function(){location.replace(${JSON.stringify(intent)})},400)</script><p><a href="${escapeHtml(target)}">앱으로 돌아가기</a></p></body></html>`
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }).end(html)
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 export function kakaoStart(res: ServerResponse, redirect: string | null): void {
@@ -67,7 +98,7 @@ export async function kakaoCallback(
   const bail = (message: string) => {
     const url = new URL(target)
     url.searchParams.set('error_description', message)
-    res.writeHead(302, { Location: url.toString() }).end()
+    sendClientRedirect(res, url.toString())
   }
 
   if (!code) return bail('인가 코드가 없습니다.')
@@ -148,7 +179,7 @@ export async function kakaoCallback(
     const url = new URL(target)
     url.searchParams.set('code', sign({ sub: userId, role: 'authenticated' }))
     if (needsProfile) url.searchParams.set('profile', '1')
-    res.writeHead(302, { Location: url.toString() }).end()
+    sendClientRedirect(res, url.toString())
   } catch (error) {
     bail(error instanceof Error ? error.message : '로그인에 실패했습니다.')
   }
