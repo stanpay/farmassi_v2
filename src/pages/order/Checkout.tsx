@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ChevronDown } from 'lucide-react'
 import { ShippingScheduleNotice } from '../../components/shared/ShippingScheduleNotice'
 import { Header } from '../../components/layout/Header'
+import { SiteFooter } from '../../components/layout/SiteFooter'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { AddressPicker } from '../../components/shared/AddressPicker'
@@ -256,10 +257,11 @@ export function Checkout() {
   }
 
   return (
-    <div className="min-h-dvh bg-surface pb-10">
-      <Header title="주문하기" showBack backTo={`/farm/${farmSlug}`} />
-      <form
-        className="px-4 py-4 md:px-6 max-w-lg mx-auto space-y-4"
+    <div className="bg-surface">
+      <div className="flex min-h-dvh flex-col pb-10">
+        <Header title="주문하기" showBack backTo={`/farm/${farmSlug}`} />
+        <form
+          className="flex-1 px-4 py-4 md:px-6 max-w-lg mx-auto w-full space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
           if (volumeWarning) {
@@ -506,19 +508,21 @@ export function Checkout() {
         <Button type="submit" fullWidth size="lg" disabled={pending || !farm?.is_active}>
           {!farm?.is_active ? '지금은 주문을 받지 않습니다' : `${formatPrice(total)} 주문하기`}
         </Button>
-      </form>
-      <ConfirmDialog
-        open={volumeDialogOpen}
-        title="배송 일정 확인"
-        description={QTY_VOLUME_WARNING}
-        confirmLabel="확인하고 주문하기"
-        pending={pending}
-        onCancel={() => setVolumeDialogOpen(false)}
-        onConfirm={() => {
-          setVolumeDialogOpen(false)
-          void placeOrder()
-        }}
-      />
+        </form>
+        <ConfirmDialog
+          open={volumeDialogOpen}
+          title="배송 일정 확인"
+          description={QTY_VOLUME_WARNING}
+          confirmLabel="확인하고 주문하기"
+          pending={pending}
+          onCancel={() => setVolumeDialogOpen(false)}
+          onConfirm={() => {
+            setVolumeDialogOpen(false)
+            void placeOrder()
+          }}
+        />
+      </div>
+      <SiteFooter />
     </div>
   )
 }
