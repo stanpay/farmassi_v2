@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Header } from '../../components/layout/Header'
+import { SiteFooter } from '../../components/layout/SiteFooter'
 import { OrderItem } from '../../components/shared/OrderItem'
 import { PageSpinner } from '../../components/ui/Feedback'
 import { Button } from '../../components/ui/Button'
@@ -27,35 +28,38 @@ export function MyOrders() {
   }, [user])
 
   return (
-    <div className="min-h-dvh bg-surface pb-10">
-      <Header
-        title="내 주문"
-        showBack
-        backTo="/"
-        rightElement={
-          <button type="button" className="text-sm text-muted" onClick={() => void signOut()}>
-            로그아웃
-          </button>
-        }
-      />
-      <div className="px-4 py-4 max-w-lg mx-auto space-y-3">
-        {loading ? (
-          <PageSpinner />
-        ) : orders.length === 0 ? (
-          <p className="text-center text-muted py-10">주문 내역이 없습니다</p>
-        ) : (
-          orders.map((order) => (
-            <Link key={order.id} to={`/me/orders/${order.id}`} className="block">
-              <OrderItem order={toOrderListModel(order)} />
-            </Link>
-          ))
-        )}
-        <Link to="/">
-          <Button fullWidth variant="outline">
-            농가 찾아 주문하기
-          </Button>
-        </Link>
+    <div className="bg-surface">
+      <div className="flex min-h-dvh flex-col pb-10">
+        <Header
+          title="내 주문"
+          showBack
+          backTo="/"
+          rightElement={
+            <button type="button" className="text-sm text-muted" onClick={() => void signOut()}>
+              로그아웃
+            </button>
+          }
+        />
+        <div className="flex-1 px-4 py-4 max-w-lg mx-auto w-full space-y-3">
+          {loading ? (
+            <PageSpinner />
+          ) : orders.length === 0 ? (
+            <p className="text-center text-muted py-10">주문 내역이 없습니다</p>
+          ) : (
+            orders.map((order) => (
+              <Link key={order.id} to={`/me/orders/${order.id}`} className="block">
+                <OrderItem order={toOrderListModel(order)} />
+              </Link>
+            ))
+          )}
+          <Link to="/">
+            <Button fullWidth variant="outline">
+              농가 찾아 주문하기
+            </Button>
+          </Link>
+        </div>
       </div>
+      <SiteFooter />
     </div>
   )
 }

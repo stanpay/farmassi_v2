@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Header } from '../../components/layout/Header'
+import { SiteFooter } from '../../components/layout/SiteFooter'
 import { DepositGuide } from '../../components/shared/DepositGuide'
 import { Card } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
@@ -43,48 +44,51 @@ export function MyOrderDetail() {
   const farm = order.farms
 
   return (
-    <div className="min-h-dvh bg-surface pb-10">
-      <Header title="주문 상세" subtitle={order.order_no} showBack backTo="/me/orders" />
-      <div className="px-4 py-4 max-w-lg mx-auto space-y-4">
-        <Card className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold">{farm?.name ?? '농가'}</h3>
-            <Badge>{statusLabels[order.status]}</Badge>
-          </div>
-          {order.order_items.map((item) => (
-            <div key={item.id} className="flex justify-between text-sm">
-              <span>
-                {item.product_name} {item.unit} ×{item.quantity}
-              </span>
-              <span>{formatPrice(item.line_amount)}</span>
+    <div className="bg-surface">
+      <div className="flex min-h-dvh flex-col pb-10">
+        <Header title="주문 상세" subtitle={order.order_no} showBack backTo="/me/orders" />
+        <div className="flex-1 px-4 py-4 max-w-lg mx-auto w-full space-y-4">
+          <Card className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold">{farm?.name ?? '농가'}</h3>
+              <Badge>{statusLabels[order.status]}</Badge>
             </div>
-          ))}
-          <div className="flex justify-between font-bold pt-2 border-t border-gray-100">
-            <span>합계</span>
-            <span className="text-primary">{formatPrice(order.total_amount)}</span>
-          </div>
-        </Card>
+            {order.order_items.map((item) => (
+              <div key={item.id} className="flex justify-between text-sm">
+                <span>
+                  {item.product_name} {item.unit} ×{item.quantity}
+                </span>
+                <span>{formatPrice(item.line_amount)}</span>
+              </div>
+            ))}
+            <div className="flex justify-between font-bold pt-2 border-t border-gray-100">
+              <span>합계</span>
+              <span className="text-primary">{formatPrice(order.total_amount)}</span>
+            </div>
+          </Card>
 
-        {order.status === 'pending_deposit' && (
-          <DepositGuide
-            bankName={farm?.bank_name ?? ''}
-            accountNumber={farm?.account_number ?? ''}
-            accountHolder={farm?.account_holder ?? ''}
-            amount={order.deposit_due_amount}
-          />
-        )}
+          {order.status === 'pending_deposit' && (
+            <DepositGuide
+              bankName={farm?.bank_name ?? ''}
+              accountNumber={farm?.account_number ?? ''}
+              accountHolder={farm?.account_holder ?? ''}
+              amount={order.deposit_due_amount}
+            />
+          )}
 
-        <Card>
-          <h3 className="font-semibold mb-2">받는 분</h3>
-          <p className="text-sm">
-            {order.recipient_name} · {order.recipient_phone}
-          </p>
-          <p className="mt-1 text-sm text-muted">
-            {fullAddress(order.address, order.address_detail, order.zonecode)}
-          </p>
-          {order.request_memo && <p className="mt-2 text-sm">요청사항: {order.request_memo}</p>}
-        </Card>
+          <Card>
+            <h3 className="font-semibold mb-2">받는 분</h3>
+            <p className="text-sm">
+              {order.recipient_name} · {order.recipient_phone}
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              {fullAddress(order.address, order.address_detail, order.zonecode)}
+            </p>
+            {order.request_memo && <p className="mt-2 text-sm">요청사항: {order.request_memo}</p>}
+          </Card>
+        </div>
       </div>
+      <SiteFooter />
     </div>
   )
 }

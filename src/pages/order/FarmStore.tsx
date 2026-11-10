@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Header } from '../../components/layout/Header'
+import { SiteFooter } from '../../components/layout/SiteFooter'
 import { useLoginSheet } from '../../components/auth/LoginSheet'
 import { FarmInquiryButtons } from '../../components/shared/KakaoChannelButton'
 import { ProductCard } from '../../components/shared/ProductCard'
@@ -109,74 +110,77 @@ export function FarmStore() {
   }
 
   return (
-    <div className="min-h-dvh bg-surface pb-28">
-      <Header
-        title={farm.name}
-        subtitle={farmDisplayLocation(farm, BRAND_SUB)}
-        copyableSubtitle={Boolean(farm.address?.trim())}
-        showBack
-        backTo={`/farm/${farmSlug}/landingpage`}
-        rightElement={
-          <div className="flex items-center gap-3">
-            {isAdmin && (
-              <Link to="/admin/farms" className="text-sm font-medium text-muted hover:text-gray-900">
-                관리자 페이지
-              </Link>
-            )}
-            <button
-              type="button"
-              className="text-sm font-medium text-primary"
-              onClick={() => {
-                if (user) navigate('/me/orders')
-                else openLogin({ next: '/me/orders' })
-              }}
-            >
-              내 주문
-            </button>
-          </div>
-        }
-      />
-      <div className="px-4 py-4 md:px-6 max-w-5xl mx-auto space-y-4">
-        {hasInquiry ? (
-          <FarmInquiryButtons
-            kakaoChannelUrl={farm.kakao_channel_url}
-            phone={farm.phone}
-            mobilePhone={farm.mobile_phone}
-          />
-        ) : (farm.description || farm.product_summary) ? (
-          <Card>
-            <p className="text-sm text-gray-700">{farm.description || farm.product_summary}</p>
-          </Card>
-        ) : null}
-        <ShippingScheduleNotice
-          days={farm.delivery_days}
-          farmId={farm.id}
-          volumeWarning={volumeWarning}
-          volumeWarningMessage={QTY_VOLUME_WARNING}
+    <div className="bg-surface">
+      <div className="flex min-h-dvh flex-col">
+        <Header
+          title={farm.name}
+          subtitle={farmDisplayLocation(farm, BRAND_SUB)}
+          copyableSubtitle={Boolean(farm.address?.trim())}
+          showBack
+          backTo={`/farm/${farmSlug}/landingpage`}
+          rightElement={
+            <div className="flex items-center gap-3">
+              {isAdmin && (
+                <Link to="/admin/farms" className="text-sm font-medium text-muted hover:text-gray-900">
+                  관리자 페이지
+                </Link>
+              )}
+              <button
+                type="button"
+                className="text-sm font-medium text-primary"
+                onClick={() => {
+                  if (user) navigate('/me/orders')
+                  else openLogin({ next: '/me/orders' })
+                }}
+              >
+                내 주문
+              </button>
+            </div>
+          }
         />
-        {products.length === 0 ? (
-          <p className="text-center text-muted py-10">판매 중인 상품이 없습니다</p>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {products.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-                quantity={qtyById[product.id] ?? 0}
-                onChangeQuantity={orderingClosed ? undefined : (qty) => updateQty(product.id, qty)}
-              />
-            ))}
+        <div className="flex-1 px-4 py-4 md:px-6 max-w-5xl mx-auto w-full space-y-4">
+          {hasInquiry ? (
+            <FarmInquiryButtons
+              kakaoChannelUrl={farm.kakao_channel_url}
+              phone={farm.phone}
+              mobilePhone={farm.mobile_phone}
+            />
+          ) : (farm.description || farm.product_summary) ? (
+            <Card>
+              <p className="text-sm text-gray-700">{farm.description || farm.product_summary}</p>
+            </Card>
+          ) : null}
+          <ShippingScheduleNotice
+            days={farm.delivery_days}
+            farmId={farm.id}
+            volumeWarning={volumeWarning}
+            volumeWarningMessage={QTY_VOLUME_WARNING}
+          />
+          {products.length === 0 ? (
+            <p className="text-center text-muted py-10">판매 중인 상품이 없습니다</p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {products.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  quantity={qtyById[product.id] ?? 0}
+                  onChangeQuantity={orderingClosed ? undefined : (qty) => updateQty(product.id, qty)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+        {orderingClosed && (
+          <div className="mx-4 mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-semibold text-amber-900">지금은 주문을 받지 않습니다</p>
+            <p className="mt-1 text-xs text-amber-800">
+              상품과 농가 정보는 그대로 보실 수 있습니다. 주문은 잠시 멈춰 있습니다.
+            </p>
           </div>
         )}
       </div>
-      {orderingClosed && (
-        <div className="mx-4 mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm font-semibold text-amber-900">지금은 주문을 받지 않습니다</p>
-          <p className="mt-1 text-xs text-amber-800">
-            상품과 농가 정보는 그대로 보실 수 있습니다. 주문은 잠시 멈춰 있습니다.
-          </p>
-        </div>
-      )}
+      <SiteFooter className={selectedCount > 0 && !orderingClosed ? 'pb-28' : ''} />
       {!orderingClosed && selectedCount > 0 && (
         <div className="fixed bottom-0 left-0 right-0 border-t border-gray-100 bg-white p-4">
           <div className="max-w-5xl mx-auto flex items-center gap-3">
