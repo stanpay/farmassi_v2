@@ -12,14 +12,14 @@ from contextlib import asynccontextmanager
 import base64
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import db
 from .config import config
 from .jwt_session import sign, verify
 from .functions import FUNCTIONS, FnCtx
-from .kakao import callback_url, start_url
+from .kakao import app_handoff_html, callback_url, is_app_callback_url, start_url
 from .query import run_query
 from .scheduler import start_scheduler
 from .storage import delete_image, resolve_file, upload_image
@@ -182,7 +182,10 @@ async def kakao_start(redirect: str | None = None):
 
 @app.get("/auth/kakao/callback")
 async def kakao_callback(code: str | None = None, state: str | None = None):
-    return RedirectResponse(await callback_url(code, state), status_code=302)
+    target = await callback_url(code, state)
+    if is_app_callback_url(target):
+        return HTMLResponse(app_handoff_html(target), headers={"Cache-Control": "no-store"})
+    return RedirectResponse(target, status_code=302)
 
 
 @app.post("/auth/dev-login")

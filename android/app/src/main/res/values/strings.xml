@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">팜어시</string>
+    <string name="title_activity_main">팜어시</string>
+    <string name="package_name">kr.farmassi.app</string>
+    <string name="custom_url_scheme">kr.farmassi.app</string>
+</resources>
