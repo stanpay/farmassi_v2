@@ -1,13 +1,20 @@
+import { Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { FarmOrderPageLink } from '../../components/layout/FarmOrderPageLink'
 import { Header } from '../../components/layout/Header'
 import { NotificationBell } from '../../components/notifications/NotificationBell'
 import { DepositConfirmExtra } from '../../components/shared/DepositConfirmExtra'
 import { OrderItem } from '../../components/shared/OrderItem'
+import { Button } from '../../components/ui/Button'
 import { useFarmWorkspace } from '../../lib/farmWorkspace'
+import {
+  isDemoFarmOrderId,
+  loadDemoFarmOrders,
+  updateDemoFarmOrderStatus,
+} from '../../lib/demoFarmOrders'
 import { farmUpdatableStatuses, statusLabels } from '../../lib/orderStatus'
-import { toOrderListModel, type OrderRow } from '../../lib/orders'
+import { reorderCountsByOrderId, toOrderListModel, type OrderRow } from '../../lib/orders'
 import { supabase } from '../../lib/supabase'
 import type { OrderStatus } from '../../types/models'
 
@@ -20,13 +27,29 @@ const filters: { id: FilterStatus; label: string }[] = [
   { id: 'packing', label: '송장 발급 완료' },
   { id: 'shipping', label: '배송중' },
   { id: 'completed', label: '배송완료' },
+  { id: 'cancelled', label: '취소' },
 ]
 
 export function FarmOrders() {
-  const { farm, basePath, isAdminView } = useFarmWorkspace()
+  const { farm, basePath } = useFarmWorkspace()
+  const navigate = useNavigate()
   const [params] = useSearchParams()
-  const [filter, setFilter] = useState<FilterStatus>('all')
-  const [orders, setOrders] = useState<OrderRow[]>([])
+  const statusParam = params.get('status')
+  const [filter, setFilter] = useState<FilterStatus>(() =>
+    statusParam && filters.some((f) => f.id === statusParam) ? (statusParam as FilterStatus) : 'all',
+  )
+  const [dbOrders, setDbOrders] = useState<OrderRow[]>([])
+  const [demoOrders, setDemoOrders] = useState<OrderRow[]>(() => loadDemoFarmOrders(farm.id))
+
+  useEffect(() => {
+    if (statusParam && filters.some((f) => f.id === statusParam)) {
+      setFilter(statusParam as FilterStatus)
+    }
+  }, [statusParam])
+
+  useEffect(() => {
+    setDemoOrders(loadDemoFarmOrders(farm.id))
+  }, [farm.id, statusParam])
 
   useEffect(() => {
     supabase
@@ -34,11 +57,17 @@ export function FarmOrders() {
       .select('*, order_items(*), shipments(*)')
       .eq('farm_id', farm.id)
       .order('created_at', { ascending: false })
-      .then(({ data }) => setOrders((data as OrderRow[]) ?? []))
+      .then(({ data }) => setDbOrders((data as OrderRow[]) ?? []))
   }, [farm.id])
+
+  const orders = useMemo(() => {
+    const dbIds = new Set(dbOrders.map((row) => row.id))
+    return [...demoOrders.filter((row) => !dbIds.has(row.id)), ...dbOrders]
+  }, [demoOrders, dbOrders])
 
   const filtered = filter === 'all' ? orders : orders.filter((order) => order.status === filter)
   const highlight = params.get('highlight')
+  const reorderCounts = useMemo(() => reorderCountsByOrderId(orders), [orders])
 
   const counts = useMemo(
     () =>
@@ -47,9 +76,13 @@ export function FarmOrders() {
   )
 
   async function changeStatus(id: string, status: OrderStatus) {
+    if (isDemoFarmOrderId(id)) {
+      setDemoOrders(updateDemoFarmOrderStatus(farm.id, id, status))
+      return
+    }
     const { error } = await supabase.from('orders').update({ status }).eq('id', id)
     if (!error) {
-      setOrders((prev) => prev.map((order) => (order.id === id ? { ...order, status } : order)))
+      setDbOrders((prev) => prev.map((order) => (order.id === id ? { ...order, status } : order)))
     }
   }
 
@@ -66,6 +99,12 @@ export function FarmOrders() {
         }
       />
       <div className="px-4 py-4 md:px-6 max-w-5xl mx-auto space-y-4">
+        <div className="flex justify-end">
+          <Button type="button" size="sm" onClick={() => navigate(`${basePath}/orders/new`)}>
+            <Plus className="h-4 w-4" />
+            직접 추가하기
+          </Button>
+        </div>
         <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
           {filters.map(({ id, label }) => (
             <button
@@ -87,35 +126,38 @@ export function FarmOrders() {
             filtered.map((order) => (
               <div key={order.id} className={highlight === order.id ? 'rounded-2xl ring-2 ring-primary' : ''}>
                 <OrderItem
-                  order={toOrderListModel(order)}
+                  order={toOrderListModel(order, { reorderCount: reorderCounts.get(order.id) })}
                   extra={
-                    isAdminView && order.status === 'pending_deposit' ? (
-                      <DepositConfirmExtra
-                        orderId={order.id}
-                        depositCode={order.deposit_code}
-                        onConfirmed={() => {
-                          setOrders((prev) =>
-                            prev.map((row) => (row.id === order.id ? { ...row, status: 'paid' } : row)),
-                          )
-                        }}
-                      />
-                    ) : order.status !== 'pending_deposit' && order.status !== 'cancelled' ? (
+                    <>
+                      {order.status === 'pending_deposit' && (
+                        <DepositConfirmExtra
+                          orderId={order.id}
+                          depositCode={order.deposit_code}
+                          onConfirmed={() => {
+                            if (isDemoFarmOrderId(order.id)) {
+                              setDemoOrders(updateDemoFarmOrderStatus(farm.id, order.id, 'paid'))
+                              return
+                            }
+                            setDbOrders((prev) =>
+                              prev.map((row) => (row.id === order.id ? { ...row, status: 'paid' } : row)),
+                            )
+                          }}
+                        />
+                      )}
                       <div className="mt-3">
                         <select
                           className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs"
                           value={order.status}
                           onChange={(e) => void changeStatus(order.id, e.target.value as OrderStatus)}
                         >
-                          {farmUpdatableStatuses
-                            .filter((status) => status !== 'cancelled' || order.status !== 'completed')
-                            .map((status) => (
-                              <option key={status} value={status}>
-                                {statusLabels[status]}
-                              </option>
-                            ))}
+                          {farmUpdatableStatuses.map((status) => (
+                            <option key={status} value={status}>
+                              {statusLabels[status]}
+                            </option>
+                          ))}
                         </select>
                       </div>
-                    ) : undefined
+                    </>
                   }
                 />
               </div>

@@ -27,51 +27,33 @@ npm run dev
 ## 처음 쓰는 순서
 
 1. [카카오 디벨로퍼스](https://developers.kakao.com/console/app)에서 앱을 만들고 **카카오 로그인을 ON** 합니다.
-2. REST API 키의 Redirect URI에 **Supabase 콜백만** 등록합니다.
-   - `https://pfysjhabkqwfytzpsbom.supabase.co/auth/v1/callback`
-3. REST API 키에서 **Client Secret을 활성화**하고 값을 복사합니다.
+2. REST API 키의 Redirect URI에 **자체 API 콜백**을 등록합니다.
+   - `https://api.shop.lkim.me/auth/kakao/callback`
+3. REST API 키에서 **Client Secret을 활성화**하고 값을 복사합니다. `server/.env` 의 `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET` 에 넣습니다.
 4. [카카오 로그인] → [동의항목]에서 **닉네임**(`profile_nickname`), **프로필 사진**(`profile_image`)을 [설정]으로 켜 둡니다. 필수·선택 어느 쪽이든 됩니다. `account_email`은 비즈 앱이 아니면 요청하지 않습니다.
-5. Supabase Dashboard → Authentication → Providers → Kakao를 켭니다.
-   - Client ID: 카카오 REST API 키
-   - Client Secret: 카카오 Client Secret
-   - 이메일 없이 로그인 허용(Allow users without an email): ON (`account_email`을 안 쓰면 필수)
-6. Authentication → URL Configuration
-   - Site URL: `https://farmassi.kr`
-   - Redirect URLs: `http://localhost:5173/**`, `https://farmassi.kr/**`, `https://www.farmassi.kr/**`
-
-7. 배송지 검색용 **카카오맵**을 켭니다.
+5. 배송지 검색용 **카카오맵**을 켭니다.
    - [카카오 개발자](https://developers.kakao.com) → 내 애플리케이션 → 앱 키의 **JavaScript 키**를 사용합니다.
-   - 플랫폼 → Web: `http://localhost:5173`, `https://farmassi.kr`, `https://www.farmassi.kr`, `https://dev.farmassi.kr`
-   - JavaScript 키는 `.env`의 `VITE_KAKAO_JS_KEY`에 넣습니다.
+   - 플랫폼 → Web: `http://localhost:5173`, `https://shop.lkim.me`
+   - JavaScript 키는 프론트 env의 `VITE_KAKAO_JS_KEY`에 넣습니다.
    - 주소 검색·역지오코딩은 서버의 `KAKAO_REST_API_KEY`(REST API 키)를 사용합니다.
-
-8. Authentication → Providers → Email에서 **공개 회원가입은 끕니다.** 관리자는 카카오로 로그인한 뒤, 해당 사용자만 `profiles.role` 을 `admin` 으로 올립니다. 다른 카카오 계정은 관리자 페이지에 들어갈 수 없습니다.
+6. 관리자는 카카오로 로그인한 뒤, 해당 사용자만 `profiles.role` 을 `admin` 으로 올립니다.
 
 ```sql
 update public.profiles
    set role = 'admin'
- where id = '<auth user uuid>';
+ where id = '<user uuid>';
 ```
 
-9. 관리자 → **농가**에서 농가를 만들고, 카카오로 이미 로그인한 담당 계정을 연결합니다. 연결된 계정만 `/manage` 에 들어갑니다.
+7. 관리자 → **농가**에서 농가를 만들고, 카카오로 이미 로그인한 담당 계정을 연결합니다. 연결된 계정만 `/manage` 에 들어갑니다.
+8. (선택) 웹 푸시용 VAPID 키는 `server/.env` 에 둡니다 (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`).
 
-10. (선택) 웹 푸시용 VAPID 비밀키를 Edge Function 시크릿으로 등록합니다.
+웹 푸시는 브라우저 권한·iOS 홈화면 추가 여부에 따라 100% 보장되지 않습니다. 앱이 열려 있으면 폴링 기반 인앱 알림이 동작합니다.
 
-```bash
-npx supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... --project-ref pfysjhabkqwfytzpsbom
-```
-
-웹 푸시는 브라우저 권한·iOS 홈화면 추가 여부에 따라 100% 보장되지 않습니다. 농가 페이지가 열려 있으면 Realtime 인앱 알림이 동작합니다.
-
-## 이후 연동 (기반만 준비됨)
+## 이후 연동
 
 - 우체국 송장: 상품에 저장한 택배 정보로 창구소포 엑셀을 농가별로 다운로드 (`/manage/products`, `/admin/shipments`)
-- 계좌 스크래핑(GND, 헥토파이낸셜, 뱅크샐러드, 코드에프): `src/integrations/deposit`, Edge Function `scrape-deposits`
-- 입금 확인 공통 진입점: `confirm-deposit`
-
-## 배포
-
-Vercel Framework Preset: Vite, Build: `npm run build`, Output: `dist`
+- 입금 스크래핑: 자체 API `POST /rpc/scrape-deposits`
+- 입금 확인: `POST /rpc/confirm-deposit`
 
 ## 뱅크다A 입금 자동확인
 
@@ -79,7 +61,7 @@ Vercel Framework Preset: Vite, Build: `npm run build`, Output: `dist`
 
 ### 설정
 
-Edge Function 환경변수:
+`server/.env`:
 
 ```
 BANKDA_ACCESS_TOKEN=...   # 뱅크다 > 설정 > 데이터전송 관리 > REST API
@@ -92,20 +74,17 @@ CRON_SECRET=...           # 크론이 scrape-deposits 를 호출할 때 쓰는 �
 ### 실행
 
 ```bash
-supabase db push
-supabase functions deploy scrape-deposits
-
 # 크론에서
 curl -X POST -H "x-cron-secret: $CRON_SECRET" \
   -H "Content-Type: application/json" -d '{"days":3}' \
-  https://<project>.supabase.co/functions/v1/scrape-deposits
+  https://api.shop.lkim.me/rpc/scrape-deposits
 ```
 
-관리자는 로그인 상태로 같은 함수를 호출해 수동 실행할 수 있습니다.
+관리자는 로그인 상태로 같은 RPC를 호출해 수동 실행할 수 있습니다.
 
 ### 매칭 규칙
 
-`_shared/depositMatching.ts` 에 있습니다. **금액이 정확히 같아야** 후보가 되고,
+서버의 입금 매칭 로직에 있습니다. **금액이 정확히 같아야** 후보가 되고,
 입금자명은 후보를 좁히는 데만 씁니다.
 
 | 상황 | 결과 |
@@ -127,9 +106,9 @@ curl -X POST -H "x-cron-secret: $CRON_SECRET" \
 
 ---
 
-## 자체 스택 (Supabase 제거)
+## 자체 스택
 
-Supabase 대신 로컬 PostgreSQL + 자체 API 서버로 돌아갑니다.
+로컬 PostgreSQL + 자체 API 서버로 동작합니다.
 
 ```
 브라우저 ── https://shop.lkim.me ──────► nginx ──► /opt/homebrew/var/www/shop (정적)

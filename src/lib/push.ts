@@ -1,3 +1,5 @@
+import { Capacitor } from '@capacitor/core'
+
 function urlBase64ToUint8Array(base64String: string) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
@@ -24,6 +26,8 @@ export function isPushSupported() {
 let registrationPromise: Promise<ServiceWorkerRegistration | null> | null = null
 
 export async function registerServiceWorker() {
+  // 안드로이드 앱(WebView)은 웹 푸시를 못 받고, 서비스 워커가 네이티브 브리지 주입을 가로챌 수 있다.
+  if (Capacitor.isNativePlatform()) return null
   if (!('serviceWorker' in navigator)) return null
   if (registrationPromise) return registrationPromise
 

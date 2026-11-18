@@ -1,50 +1,48 @@
 import { LayoutDashboard, Package, Truck } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
 import { FarmOrderPageLink } from '../../components/layout/FarmOrderPageLink'
 import { Header } from '../../components/layout/Header'
 import { NotificationBell } from '../../components/notifications/NotificationBell'
-import { OrderChart } from '../../components/shared/OrderChart'
-import { OrderItem } from '../../components/shared/OrderItem'
+import {
+  MonthlyOrderTrendCard,
+  ProductSalesShareCard,
+  RevenueAnalysisCard,
+} from '../../components/shared/DashboardAnalytics'
 import { StatCard } from '../../components/ui/StatCard'
 import { useAuth } from '../../lib/auth'
+import { demoDashboardOrders } from '../../lib/demoDashboardOrders'
+import { loadDemoFarmOrders } from '../../lib/demoFarmOrders'
 import { useFarmWorkspace } from '../../lib/farmWorkspace'
 import { farmDisplayLocation, formatDate, formatPrice } from '../../lib/format'
-import { toOrderListModel, type OrderRow } from '../../lib/orders'
+import type { OrderRow } from '../../lib/orders'
 import { supabase } from '../../lib/supabase'
 
 export function FarmDashboard() {
   const { farm, basePath, isAdminView } = useFarmWorkspace()
   const { signOut } = useAuth()
-  const navigate = useNavigate()
-  const [orders, setOrders] = useState<OrderRow[]>([])
-  const [trend, setTrend] = useState<{ label: string; day: string; orders: number; today?: boolean }[]>([])
+  const [dbOrders, setDbOrders] = useState<OrderRow[]>([])
+  const [demoOrders, setDemoOrders] = useState<OrderRow[]>(() => loadDemoFarmOrders(farm.id))
 
   useEffect(() => {
+    setDemoOrders(loadDemoFarmOrders(farm.id))
     supabase
       .from('orders')
       .select('*, order_items(*)')
       .eq('farm_id', farm.id)
       .order('created_at', { ascending: false })
-      .limit(50)
-      .then(({ data }) => {
-        const rows = (data as OrderRow[]) ?? []
-        setOrders(rows)
-        const days = [...Array(7)].map((_, i) => {
-          const d = new Date()
-          d.setDate(d.getDate() - (6 - i))
-          d.setHours(0, 0, 0, 0)
-          const day = d.toLocaleDateString('ko-KR', { weekday: 'short' })
-          const label = `${d.getMonth() + 1}/${d.getDate()}`
-          const count = rows.filter((order) => {
-            const created = new Date(order.created_at)
-            return created.toDateString() === d.toDateString()
-          }).length
-          return { label, day, orders: count, today: i === 6 }
-        })
-        setTrend(days)
-      })
+      .then(({ data }) => setDbOrders((data as OrderRow[]) ?? []))
   }, [farm.id])
+
+  const liveOrders = useMemo(() => {
+    const dbIds = new Set(dbOrders.map((row) => row.id))
+    return [...demoOrders.filter((row) => !dbIds.has(row.id)), ...dbOrders]
+  }, [demoOrders, dbOrders])
+
+  // 실제·직접추가 주문이 없으면 대시보드용 더미로 채운다(주문 목록과는 분리).
+  const orders = useMemo(
+    () => (liveOrders.length > 0 ? liveOrders : demoDashboardOrders(farm.id)),
+    [liveOrders, farm.id],
+  )
 
   const today = new Date().toDateString()
   const todayOrders = orders.filter((o) => new Date(o.created_at).toDateString() === today).length
@@ -83,7 +81,6 @@ export function FarmDashboard() {
             icon={Package}
             to={`${basePath}/orders`}
           />
-          {/* 배송 화면이 같은 조건(paid·packing)으로 목록을 보여준다. */}
           <StatCard
             label="출고 대기"
             value={`${pendingDelivery}건`}
@@ -97,25 +94,12 @@ export function FarmDashboard() {
             to={`${basePath}/orders`}
           />
         </div>
-        {trend.length > 0 && <OrderChart data={trend} />}
-        <section>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-bold text-gray-900">최근 주문</h3>
-            <button
-              type="button"
-              onClick={() => navigate(`${basePath}/orders`)}
-              className="text-sm text-primary font-medium"
-            >
-              전체보기
-            </button>
-          </div>
-          <div className="space-y-3">
-            {orders.slice(0, 5).map((order) => (
-              <OrderItem key={order.id} order={toOrderListModel(order)} />
-            ))}
-            {orders.length === 0 && <p className="text-sm text-muted">아직 주문이 없습니다.</p>}
-          </div>
-        </section>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <MonthlyOrderTrendCard orders={orders} />
+          <ProductSalesShareCard orders={orders} />
+        </div>
+        <RevenueAnalysisCard orders={orders} />
       </div>
     </>
   )

@@ -99,7 +99,7 @@ export function AdminShipments() {
       <div className="px-4 py-4 md:px-6 max-w-5xl mx-auto space-y-4">
         <div className="flex items-center gap-2">
           {([
-            ['now', '현재', nowOrders.length],
+            ['now', '전체', nowOrders.length],
             ['later', '송장 접수 대기', laterOrders.length],
           ] as const).map(([id, label, count]) => (
             <button
@@ -118,14 +118,10 @@ export function AdminShipments() {
         </div>
         {tab === 'later' && (
           <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            손님이 출고일을 뒤로 미뤄 둔 주문입니다. 그날이 되면 &apos;현재&apos; 로 넘어옵니다.
+            손님이 출고일을 뒤로 미뤄 둔 주문입니다. 그날이 되면 &apos;전체&apos; 로 넘어옵니다.
           </p>
         )}
         <ShippingPausePanel farmSelect farms={pauseFarms} />
-        <p className="text-sm text-muted">
-          중량·부피·내용품코드는 상품에 저장된 값으로 채워집니다. 인터넷우체국 창구소포접수에서 엑셀을 올린 뒤
-          주소검증하세요.
-        </p>
         {groups.map((group) => (
           <div key={group.farmId} className="space-y-3">
             <Card className="flex flex-wrap items-center justify-between gap-3">
@@ -135,7 +131,7 @@ export function AdminShipments() {
               </div>
               <KpostParcelExport
                 orders={group.orders}
-                fileStem={`kpost_${group.slug}`}
+                farmName={group.name}
                 onUpdated={() => void loadOrders()}
                 pausedReason={(() => {
                   // 정지 기간에는 송장을 만들지 않는다. 송장 자동화가 없으므로
