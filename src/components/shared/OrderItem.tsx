@@ -245,7 +245,7 @@ function OrderDetails({ order, maskSensitive }: { order: OrderListModel; maskSen
         )}
         <Row label="입금코드" value={order.depositCode} />
         <Row label="주문번호" value={order.orderNo} />
-        {order.addedBy && <Row label="직접 추가한 사람" value={order.addedBy} />}
+        {order.addedBy && <Row label="추가한 사람" value={order.addedBy} />}
         <Row label="주문일시" value={order.orderDate} />
       </dl>
     </details>
