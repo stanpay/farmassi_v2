@@ -48,14 +48,21 @@ function apiBase(): string {
 
 function siteBase(requestUrl: URL): string {
   const fromEnv = (process.env.SITE_URL || process.env.VITE_SITE_URL || '').replace(/\/+$/, '')
-  if (fromEnv && !/^https?:\/\/localhost\b/i.test(fromEnv) && !/^https?:\/\/127\./.test(fromEnv)) {
-    return fromEnv
+  let base = fromEnv
+  if (!base || /^https?:\/\/localhost\b/i.test(base) || /^https?:\/\/127\./.test(base)) {
+    base = requestUrl.origin
   }
-  // apex → www 리다이렉트 환경에서도 OG 절대 URL이 안정적으로 www 를 가리키게 한다.
-  if (requestUrl.hostname === 'farmassi.kr') {
-    return 'https://www.farmassi.kr'
+  // apex 는 www 로 308 되므로 OG 절대 URL은 항상 www 를 쓴다.
+  try {
+    const u = new URL(base)
+    if (u.hostname === 'farmassi.kr') {
+      u.hostname = 'www.farmassi.kr'
+      return u.origin
+    }
+  } catch {
+    /* ignore */
   }
-  return requestUrl.origin
+  return base.replace(/\/+$/, '')
 }
 
 function escapeHtml(value: string): string {
@@ -138,17 +145,17 @@ export async function loadFarmOg(slug: string, requestUrl: URL): Promise<FarmOgD
     (farm.product_summary && farm.product_summary.trim()) ||
     '농가에서 바로, 신선한 직송'
 
-  // 공유 URL은 안내 문자와 같이 랜딩을 canonical 로 둔다.
-  const pageUrl = `${site}/farm/${encodeURIComponent(slug)}/landingpage`
-  const path = requestUrl.pathname.replace(/\/+$/, '') || `/farm/${encodeURIComponent(slug)}/landingpage`
-  const appUrl = `${site}${path}${requestUrl.search}`
+  // og:url 은 스크랩 중인 주소와 같아야 한다.
+  // /farm/slug 를 긁었는데 og:url 만 /landingpage 로 바꾸면 카톡이 URL별 캐시를 헷갈린다.
+  const path = requestUrl.pathname.replace(/\/+$/, '') || `/farm/${encodeURIComponent(slug)}`
+  const pageUrl = `${site}${path}${requestUrl.search}`
 
   return {
     name: farm.name,
     description,
     imageUrl: absoluteUrl(image ?? '/og-default.jpg', site),
     pageUrl,
-    appUrl,
+    appUrl: pageUrl,
   }
 }
 
@@ -158,7 +165,7 @@ export function renderFarmOgHtml(data: FarmOgData): string {
   const image = escapeHtml(data.imageUrl)
   const url = escapeHtml(data.pageUrl)
   const appUrl = escapeHtml(data.appUrl)
-  // 크롤러는 meta를 읽고, 사람이 이 HTML을 열면 SPA로 바로 보낸다.
+  // JS만 쓴다. meta refresh 는 일부 스크래퍼가 따라가 OG를 놓친다.
   const appUrlJs = JSON.stringify(data.appUrl)
 
   return `<!doctype html>
@@ -181,7 +188,6 @@ export function renderFarmOgHtml(data: FarmOgData): string {
   <meta name="twitter:title" content="${title}" />
   <meta name="twitter:description" content="${description}" />
   <meta name="twitter:image" content="${image}" />
-  <meta http-equiv="refresh" content="0;url=${appUrl}" />
   <script>location.replace(${appUrlJs})</script>
 </head>
 <body>
