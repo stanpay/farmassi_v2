@@ -9,7 +9,7 @@
     "ops": "node --env-file=.env.ops --experimental-strip-types ops/index.ts"
   },
   "dependencies": {
-    "nodemailer": "^9.0.5",
+    "nodemailer": "^9.1.1",
     "pg": "^8.13.1",
     "web-push": "^3.6.7"
   }
