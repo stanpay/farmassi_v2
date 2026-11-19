@@ -155,6 +155,17 @@ launchctl kickstart -k gui/$(id -u)/me.lkim.farmassi-api    # API 재시작
 nginx 설정은 `/opt/homebrew/etc/nginx/nginx.conf` 에 있고, 원본 백업과 추가한 블록은
 `deploy/` 에 있습니다. 인증서는 certbot(`~/letsencrypt/config/live/shop.lkim.me`)으로 발급했습니다.
 
+`farmassi.kr` 프론트(Vercel)는 카톡·문자 링크 미리보기용 Routing Middleware(`middleware.ts`)가
+봇 요청만 가로채 농가 OG HTML을 내려준다. Vercel 프로젝트에 아래를 넣으면 되고, 없어도
+기본값(`API_URL=https://api.shop.lkim.me`, `SITE_URL=요청 Origin`)으로 동작한다.
+
+| 변수 | 예 |
+|---|---|
+| `API_URL` | `https://api.shop.lkim.me` |
+| `SITE_URL` | `https://www.farmassi.kr` |
+
+배포 후 카톡은 예전 스크랩을 캐시하므로 [공유 디버거](https://developers.kakao.com/tool/debugger/sharing)에서 농가 URL을 재수집한다.
+
 ### 실시간 알림
 
 Postgres 논리복제 대신 15초 폴링으로 대체했습니다 (`src/lib/apiClient.ts` 의 `channel`).
