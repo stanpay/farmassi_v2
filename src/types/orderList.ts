@@ -25,6 +25,8 @@ export interface OrderListModel {
   shippingFee?: number
   depositDueAmount?: number
   depositCode?: string | null
+  /** 농가가 직접 추가한 주문이면 추가한 사람 이름. 스토어 주문은 없음 */
+  addedBy?: string | null
   /** 같은 연락처 기준 N번째 주문(2 이상이면 재주문). 없으면 첫 주문 */
   reorderCount?: number
 }

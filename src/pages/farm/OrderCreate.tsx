@@ -23,7 +23,7 @@ import {
   appendAndDownloadDraftSourceDiffCsv,
   diffDraftSource,
 } from '../../lib/draftSourceDiff'
-import { appendDemoFarmOrders } from '../../lib/demoFarmOrders'
+import { invokeFunction } from '../../lib/functions'
 import { matchFarmProduct } from '../../lib/matchFarmProduct'
 import { matchFarmProductsRemote } from '../../lib/matchFarmProductsRemote'
 import { clearSharedOrderText, peekSharedOrderText } from '../../lib/nativeShare'
@@ -1077,6 +1077,8 @@ export function FarmOrderCreate() {
   const [fixFieldKey, setFixFieldKey] = useState<FieldKey | null>(null)
   const [converting, setConverting] = useState(false)
   const [parseError, setParseError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [products, setProducts] = useState<Product[]>([])
   const [productsLoaded, setProductsLoaded] = useState(false)
 
@@ -1409,14 +1411,18 @@ export function FarmOrderCreate() {
           )}
         </div>
 
+        {saveError ? (
+          <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800">{saveError}</p>
+        ) : null}
         <div className="flex gap-2 justify-end pb-4">
           <Button type="button" variant="outline" onClick={() => navigate(`${basePath}/orders`)}>
             취소
           </Button>
           <Button
             type="button"
-            disabled={drafts.length === 0 || errorCount > 0 || addressChecking}
-            onClick={() => {
+            disabled={drafts.length === 0 || errorCount > 0 || addressChecking || saving}
+            onClick={async () => {
+              if (saving) return
               const diffRows = drafts.flatMap((draft, index) =>
                 diffDraftSource({
                   ...draft,
@@ -1429,29 +1435,45 @@ export function FarmOrderCreate() {
               )
               appendAndDownloadDraftSourceDiffCsv(diffRows)
 
-              appendDemoFarmOrders(
-                farm.id,
-                drafts.map((draft) => ({
-                  id: draft.id,
-                  recipientName: draft.recipientName,
-                  phone: draft.phone,
-                  address: draft.address,
-                  addressDetail: draft.addressDetail,
-                  zonecode: draft.zonecode,
-                  product: draft.product,
-                  productId: draft.productId,
-                  quantity: draft.quantity,
-                  senderName: draft.senderName,
-                  senderPhone: draft.senderPhone,
-                  depositorName: resolveDepositorName(draft),
-                  memo: draft.memo,
-                  unitPrice: draft.unitPrice,
-                })),
-              )
-              navigate(`${basePath}/orders?status=pending_deposit`)
+              // 서버가 한 트랜잭션으로 넣는다. 실패하면 한 건도 안 들어가므로 카드를 그대로 두고 다시 누르면 된다.
+              setSaving(true)
+              setSaveError('')
+              try {
+                await invokeFunction<{ orders: Array<{ id: string; orderNo: string }> }>(
+                  'create-farm-orders',
+                  {
+                    farmId: farm.id,
+                    orders: drafts.map((draft) => ({
+                      recipient: {
+                        name: draft.recipientName.trim(),
+                        phone: draft.phone.trim(),
+                        zonecode: draft.zonecode.trim(),
+                        address: draft.address.trim(),
+                        addressDetail: draft.addressDetail.trim(),
+                      },
+                      sender: {
+                        name: draft.senderName.trim(),
+                        phone: draft.senderPhone.trim(),
+                        depositorName: resolveDepositorName(draft),
+                      },
+                      requestMemo: draft.memo.trim(),
+                      items: [{ productId: draft.productId, quantity: draft.quantity }],
+                    })),
+                  },
+                )
+                navigate(`${basePath}/orders?status=pending_deposit`)
+              } catch (error) {
+                setSaveError(error instanceof Error ? error.message : '주문을 저장하지 못했습니다.')
+              } finally {
+                setSaving(false)
+              }
             }}
           >
-            {drafts.length > 0 ? `${drafts.length}건 주문 추가` : '주문 추가'}
+            {saving
+              ? '저장 중…'
+              : drafts.length > 0
+                ? `${drafts.length}건 주문 추가`
+                : '주문 추가'}
           </Button>
         </div>
       </div>
