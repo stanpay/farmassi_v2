@@ -76,7 +76,7 @@ function escapeHtml(value: string): string {
 
 function absoluteUrl(maybeRelative: string, site: string): string {
   const trimmed = maybeRelative.trim()
-  if (!trimmed) return `${site}/og-default.jpg`
+  if (!trimmed) return `${site}/pwa-512.png`
   if (/^https?:\/\//i.test(trimmed)) return trimmed
   if (trimmed.startsWith('//')) return `https:${trimmed}`
   if (trimmed.startsWith('/')) return `${site}${trimmed}`
@@ -153,7 +153,7 @@ export async function loadFarmOg(slug: string, requestUrl: URL): Promise<FarmOgD
   return {
     name: farm.name,
     description,
-    imageUrl: absoluteUrl(image ?? '/og-default.jpg', site),
+    imageUrl: absoluteUrl(image ?? '/pwa-512.png', site),
     pageUrl,
     appUrl: pageUrl,
   }
@@ -179,11 +179,17 @@ function replaceMetaByName(html: string, name: string, content: string): string 
 /**
  * SPA index.html 에 농가 OG 를 심는다.
  * 문자(iMessage 등)는 UA가 들쭉날쭉해서 봇 판별만으로는 농가 사진이 안 나가고,
- * 공통 og-default.jpg(초록 로고)만 잡히는 경우가 있다. Apple도 UA 무관하게
- * 같은 메타를 주라고 권장한다.
+ * 공통 기본 OG만 잡히는 경우가 있다. Apple도 UA 무관하게 같은 메타를 주라고 권장한다.
  */
 export function injectFarmOgIntoHtml(indexHtml: string, data: FarmOgData): string {
   const title = `${data.name} | 팜어시`
+  const imageType = data.imageUrl.toLowerCase().includes('.png')
+    ? 'image/png'
+    : data.imageUrl.toLowerCase().includes('.webp')
+      ? 'image/webp'
+      : data.imageUrl.toLowerCase().includes('.gif')
+        ? 'image/gif'
+        : 'image/jpeg'
   let html = indexHtml
   html = html.replace(/<title>[^<]*<\/title>/i, `<title>${escapeHtml(title)}</title>`)
   html = replaceMetaByName(html, 'description', data.description)
@@ -197,8 +203,11 @@ export function injectFarmOgIntoHtml(indexHtml: string, data: FarmOgData): strin
   html = replaceMetaByProperty(html, 'og:description', data.description)
   html = replaceMetaByProperty(html, 'og:url', data.pageUrl)
   html = replaceMetaByProperty(html, 'og:image', data.imageUrl)
-  html = replaceMetaByProperty(html, 'og:image:width', '1200')
-  html = replaceMetaByProperty(html, 'og:image:height', '630')
+  html = replaceMetaByProperty(html, 'og:image:secure_url', data.imageUrl)
+  html = replaceMetaByProperty(html, 'og:image:type', imageType)
+  // 실제 농가 사진 비율과 다른 1200x630 를 적으면 카톡이 이미지를 버릴 수 있어 제거한다.
+  html = html.replace(/<meta\s+[^>]*property=["']og:image:width["'][^>]*>\s*/gi, '')
+  html = html.replace(/<meta\s+[^>]*property=["']og:image:height["'][^>]*>\s*/gi, '')
   html = replaceMetaByProperty(html, 'og:locale', 'ko_KR')
   if (!/rel=["']canonical["']/i.test(html)) {
     html = html.replace(/<\/head>/i, `    <link rel="canonical" href="${escapeHtml(data.pageUrl)}" />\n  </head>`)
