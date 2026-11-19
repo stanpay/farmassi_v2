@@ -90,11 +90,19 @@ export async function serveFile(req: IncomingMessage, res: ServerResponse, path:
   try {
     const info = await stat(full)
     if (!info.isFile()) throw new Error('not a file')
-    res.writeHead(200, {
+    const headers = {
       'Content-Type': MIME[extname(full)] ?? 'application/octet-stream',
       'Content-Length': info.size,
       'Cache-Control': 'public, max-age=31536000, immutable',
-    })
+      // 문자(iMessage 등) 미리보기가 이미지 존재 확인에 HEAD 를 쓰는 경우가 있다.
+      Allow: 'GET, HEAD, OPTIONS',
+    }
+    if (req.method === 'HEAD') {
+      res.writeHead(200, headers)
+      res.end()
+      return
+    }
+    res.writeHead(200, headers)
     createReadStream(full).pipe(res)
   } catch {
     res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' })
