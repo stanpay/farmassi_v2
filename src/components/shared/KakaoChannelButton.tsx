@@ -1,5 +1,5 @@
 import { Phone } from 'lucide-react'
-import { kakaoChannelChatHref } from '../../lib/format'
+import { kakaoChannelChatHref, kakaoChannelHref, safeHttpUrl } from '../../lib/format'
 import { telHref } from '../../lib/farmShareText'
 
 interface KakaoChannelButtonProps {
@@ -10,12 +10,13 @@ interface KakaoChannelButtonProps {
 const inquiryBtnClass =
   'flex h-[45px] w-full min-w-0 items-center justify-center gap-1.5 rounded-[12px] px-2 text-[15px] font-medium sm:flex-1'
 
+/** href는 호출측에서 이미 확정한 URL(프로필 또는 /chat)을 그대로 연다. */
 export function KakaoChannelButton({ href, label = '카카오톡 문의' }: KakaoChannelButtonProps) {
-  const chatHref = kakaoChannelChatHref(href)
-  if (!chatHref) return null
+  const link = safeHttpUrl(href)
+  if (!link) return null
   return (
     <a
-      href={chatHref}
+      href={link}
       target="_blank"
       rel="noopener noreferrer"
       className={`${inquiryBtnClass} bg-[#FEE500] text-black/85 hover:bg-[#F5DC00]`}
@@ -46,17 +47,23 @@ export function FarmInquiryButtons({
   kakaoChannelUrl,
   phone,
   mobilePhone,
+  kakaoLabel,
+  /** 기본 chat(문의). 계좌 QR 등 채널추가는 profile */
+  kakaoLink = 'chat',
 }: {
   kakaoChannelUrl?: string | null
   phone?: string | null
   mobilePhone?: string | null
+  kakaoLabel?: string
+  kakaoLink?: 'chat' | 'profile'
 }) {
-  const chatHref = kakaoChannelChatHref(kakaoChannelUrl)
+  const kakaoHref =
+    kakaoLink === 'profile' ? kakaoChannelHref(kakaoChannelUrl) : kakaoChannelChatHref(kakaoChannelUrl)
   const callPhone = mobilePhone?.trim() || phone?.trim() || null
-  if (!chatHref && !callPhone) return null
+  if (!kakaoHref && !callPhone) return null
   return (
     <div className="flex flex-col gap-2 sm:flex-row">
-      {chatHref ? <KakaoChannelButton href={chatHref} /> : null}
+      {kakaoHref ? <KakaoChannelButton href={kakaoHref} label={kakaoLabel} /> : null}
       {callPhone ? <PhoneInquiryButton phone={callPhone} /> : null}
     </div>
   )

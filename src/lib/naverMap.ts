@@ -9,72 +9,96 @@ export interface AddressCandidate {
   lng: number
 }
 
-interface NaverLatLng {
-  lat(): number
-  lng(): number
+interface KakaoLatLng {
+  getLat(): number
+  getLng(): number
 }
 
-interface NaverMap {
-  setCenter(latlng: NaverLatLng): void
-  autoResize(): void
+interface KakaoMap {
+  setCenter(latlng: KakaoLatLng): void
+  relayout(): void
 }
 
-interface NaverMarker {
-  setMap(map: NaverMap | null): void
-  setPosition(latlng: NaverLatLng): void
+interface KakaoMarker {
+  setMap(map: KakaoMap | null): void
+  setPosition(latlng: KakaoLatLng): void
 }
 
-interface NaverMapsSdk {
-  LatLng: new (lat: number, lng: number) => NaverLatLng
-  Map: new (container: HTMLElement, options: { center: NaverLatLng; zoom: number }) => NaverMap
-  Marker: new (options: { position: NaverLatLng; map: NaverMap }) => NaverMarker
-  Event: {
-    addListener(target: NaverMap, type: 'click', handler: (e: { coord: NaverLatLng }) => void): void
+interface KakaoMapsSdk {
+  LatLng: new (lat: number, lng: number) => KakaoLatLng
+  Map: new (container: HTMLElement, options: { center: KakaoLatLng; level: number }) => KakaoMap
+  Marker: new (options: { position: KakaoLatLng; map: KakaoMap }) => KakaoMarker
+  event: {
+    addListener(target: KakaoMap, type: 'click', handler: (e: { latLng: KakaoLatLng }) => void): void
+    removeListener(target: KakaoMap, type: 'click', handler: (e: { latLng: KakaoLatLng }) => void): void
   }
+  load(callback: () => void): void
 }
 
 declare global {
   interface Window {
-    naver?: { maps: NaverMapsSdk }
+    kakao?: { maps: KakaoMapsSdk }
   }
 }
 
-let mapsReady: Promise<NaverMapsSdk> | null = null
+let mapsReady: Promise<KakaoMapsSdk> | null = null
 
-function getClientId() {
-  const key = import.meta.env.VITE_NAVER_MAP_CLIENT_ID
-  if (!key) throw new Error('네이버 지도 Client ID(VITE_NAVER_MAP_CLIENT_ID)가 설정되지 않았습니다.')
+function getAppKey() {
+  const key = import.meta.env.VITE_KAKAO_JS_KEY
+  if (!key) throw new Error('카카오 지도 JavaScript 키(VITE_KAKAO_JS_KEY)가 설정되지 않았습니다.')
   return key
 }
 
-export function loadNaverMaps(): Promise<NaverMapsSdk> {
-  if (window.naver?.maps?.LatLng) return Promise.resolve(window.naver.maps)
+export function loadKakaoMaps(): Promise<KakaoMapsSdk> {
+  if (window.kakao?.maps?.LatLng) return Promise.resolve(window.kakao.maps)
   if (mapsReady) return mapsReady
 
   mapsReady = new Promise((resolve, reject) => {
-    const existing = document.getElementById('naver-maps-sdk')
-    if (existing && window.naver?.maps?.LatLng) {
-      resolve(window.naver.maps)
+    const finish = () => {
+      if (!window.kakao?.maps) {
+        mapsReady = null
+        reject(new Error('카카오 지도를 불러오지 못했습니다.'))
+        return
+      }
+      window.kakao.maps.load(() => {
+        if (!window.kakao?.maps?.LatLng) {
+          mapsReady = null
+          reject(new Error('카카오 지도를 불러오지 못했습니다.'))
+          return
+        }
+        resolve(window.kakao.maps)
+      })
+    }
+
+    const existing = document.getElementById('kakao-maps-sdk')
+    if (existing) {
+      if (window.kakao?.maps) {
+        finish()
+      } else {
+        existing.addEventListener('load', finish, { once: true })
+        existing.addEventListener(
+          'error',
+          () => {
+            mapsReady = null
+            reject(new Error('카카오 지도를 불러오지 못했습니다.'))
+          },
+          { once: true },
+        )
+      }
       return
     }
 
     const script = document.createElement('script')
-    script.id = 'naver-maps-sdk'
-    script.src = `https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${getClientId()}`
+    script.id = 'kakao-maps-sdk'
+    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${getAppKey()}&autoload=false`
     script.async = true
-    script.onload = () => {
-      if (!window.naver?.maps?.LatLng) {
-        mapsReady = null
-        reject(new Error('네이버 지도를 불러오지 못했습니다.'))
-        return
-      }
-      resolve(window.naver.maps)
-    }
+    script.onload = finish
     script.onerror = () => {
       mapsReady = null
+      script.remove()
       reject(
         new Error(
-          '네이버 지도를 불러오지 못했습니다. 콘솔에 Web 서비스 URL(http://localhost, http://farmassi.kr)이 등록돼 있는지 확인하세요.',
+          '카카오 지도를 불러오지 못했습니다. 카카오 개발자 콘솔 Web 플랫폼에 도메인(localhost, farmassi.kr)이 등록돼 있는지 확인하세요.',
         ),
       )
     }
@@ -145,35 +169,50 @@ export function createAddressMap(
   candidate: AddressCandidate,
   onMove: (next: AddressCandidate) => void,
 ): () => void {
-  const maps = window.naver?.maps
-  if (!maps) throw new Error('네이버 지도를 불러오지 못했습니다.')
+  const maps = window.kakao?.maps
+  if (!maps?.LatLng) throw new Error('카카오 지도를 불러오지 못했습니다.')
 
-  container.classList.add('naver-map')
+  container.classList.add('kakao-map')
+  container.replaceChildren()
   const center = new maps.LatLng(candidate.lat, candidate.lng)
-  const map = new maps.Map(container, { center, zoom: 16 })
+  const map = new maps.Map(container, { center, level: 3 })
   const marker = new maps.Marker({ position: center, map })
 
   const relayout = () => {
-    map.autoResize()
+    map.relayout()
     map.setCenter(center)
   }
   requestAnimationFrame(relayout)
   const relayoutTimer = window.setTimeout(relayout, 120)
 
-  maps.Event.addListener(map, 'click', (event) => {
-    const lat = event.coord.lat()
-    const lng = event.coord.lng()
-    marker.setPosition(event.coord)
+  const onClick = (event: { latLng: KakaoLatLng }) => {
+    const lat = event.latLng.getLat()
+    const lng = event.latLng.getLng()
+    marker.setPosition(event.latLng)
     void coordToAddress(lat, lng)
       .then(onMove)
       .catch(() => {
         /* keep previous address if reverse geocode fails */
       })
-  })
+  }
+  maps.event.addListener(map, 'click', onClick)
 
   return () => {
     window.clearTimeout(relayoutTimer)
-    marker.setMap(null)
-    container.innerHTML = ''
+    try {
+      maps.event.removeListener(map, 'click', onClick)
+    } catch {
+      /* ignore */
+    }
+    try {
+      marker.setMap(null)
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (container.isConnected) container.replaceChildren()
+    } catch {
+      /* ignore */
+    }
   }
 }

@@ -25,6 +25,7 @@ import {
   profileLabel,
   type ProfileOption,
 } from '../../components/shared/FarmContractFields'
+import { AccountQrDownloadButton } from '../../components/shared/AccountQrDownloadButton'
 import { BankdaAccountLink } from '../../components/shared/BankdaAccountLink'
 import { FarmSharePreview } from '../../components/shared/FarmSharePreview'
 import { adminNavItems } from '../../config/adminNav'
@@ -442,9 +443,10 @@ export function AdminFarms() {
               required
             />
             <Input
-              label="계좌"
+              label="계좌 · 하이픈(-) 포함해서 작성"
               value={form.account_number}
               onChange={(e) => setForm((prev) => ({ ...prev, account_number: e.target.value }))}
+              placeholder="하이픈(-) 포함해서 입력 (예: 227052-51-003379)"
               required
             />
             <Input
@@ -452,6 +454,13 @@ export function AdminFarms() {
               value={form.account_holder}
               onChange={(e) => setForm((prev) => ({ ...prev, account_holder: e.target.value }))}
               required
+            />
+            <AccountQrDownloadButton
+              farmName={form.name}
+              bankName={form.bank_name}
+              accountNumber={form.account_number}
+              accountHolder={form.account_holder}
+              farmSlug={form.slug}
             />
             <AccountPicker
               profiles={profiles}
@@ -577,14 +586,22 @@ export function AdminFarms() {
                   onChange={(bank_name) => setEditing({ ...editing, bank_name })}
                 />
                 <Input
-                  label="계좌"
+                  label="계좌 · 하이픈(-) 포함해서 작성"
                   value={editing.account_number}
                   onChange={(e) => setEditing({ ...editing, account_number: e.target.value })}
+                  placeholder="하이픈(-) 포함해서 입력 (예: 227052-51-003379)"
                 />
                 <Input
                   label="예금주"
                   value={editing.account_holder}
                   onChange={(e) => setEditing({ ...editing, account_holder: e.target.value })}
+                />
+                <AccountQrDownloadButton
+                  farmName={editing.name}
+                  bankName={editing.bank_name}
+                  accountNumber={editing.account_number}
+                  accountHolder={editing.account_holder}
+                  farmSlug={toSlug(editing.slug) || farm.slug}
                 />
                 <div className="flex gap-2">
                   <Button
@@ -639,7 +656,7 @@ export function AdminFarms() {
                               }) || null,
                             landing_blocks,
                             bank_name: editing.bank_name,
-                            account_number: editing.account_number,
+                            account_number: editing.account_number.trim(),
                             account_holder: editing.account_holder,
                             delivery_days: normalizeDeliveryDays(editing.delivery_days),
                           })

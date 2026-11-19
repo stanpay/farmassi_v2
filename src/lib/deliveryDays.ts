@@ -71,3 +71,19 @@ export function nextDeliveryDate(days: number[], from = new Date()): Date | null
 export function formatDeliveryDate(date: Date): string {
   return `${date.getMonth() + 1}월 ${date.getDate()}일(${WEEKDAYS[date.getDay()].label})`
 }
+
+/**
+ * 작성 요일 = 배송 요일의 전날.
+ *
+ * 배송이력은 물건이 나가기 전날 적는다. 월·수·금 배송이면 일·화·목에 적는다.
+ * 0=일 이라 -1 하면 음수가 되므로 +6 후 나머지로 돌린다.
+ */
+export function writeDaysFor(deliveryDays: number[]): number[] {
+  const days = normalizeDeliveryDays(deliveryDays).map((day) => (day + 6) % 7)
+  return [...new Set(days)].sort((a, b) => a - b)
+}
+
+/** '일, 화, 목' — 작성 가능한 요일을 늘어놓는다. 설정이 없으면 빈 문자열. */
+export function writeDaysLabel(deliveryDays: number[]): string {
+  return deliveryDaysLabel(writeDaysFor(deliveryDays))
+}

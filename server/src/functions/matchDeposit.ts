@@ -1,6 +1,6 @@
 import { sb } from '../sb.ts'
 import { notifyFarmMembers } from '../shared/push.ts'
-import { isAdmin } from '../shared/util.ts'
+import { isAdmin, isFarmMember } from '../shared/util.ts'
 import { fail, ok, type FnHandler } from './types.ts'
 
 /**
@@ -17,7 +17,6 @@ import { fail, ok, type FnHandler } from './types.ts'
  */
 export const matchDeposit: FnHandler = async ({ userId, body, admin }) => {
   if (!userId) return fail('로그인이 필요합니다.', 401)
-  if (!(await isAdmin(admin, userId))) return fail('관리자만 처리할 수 있습니다.', 403)
 
   const db = sb(admin)
   const action = String(body?.action ?? 'match')
@@ -28,13 +27,26 @@ export const matchDeposit: FnHandler = async ({ userId, body, admin }) => {
     .select('*').eq('id', depositId).maybeSingle()
   if (!deposit) return fail('입금 내역을 찾을 수 없습니다.', 404)
 
+  const adminUser = await isAdmin(admin, userId)
+  async function canManageFarm(farmId: string | null | undefined) {
+    if (adminUser) return true
+    if (!farmId) return false
+    return isFarmMember(admin, userId!, farmId)
+  }
+
   if (action === 'ignore') {
+    if (!(await canManageFarm(deposit.farm_id))) {
+      return fail('이 입금을 처리할 권한이 없습니다.', 403)
+    }
     await db.from('deposit_transactions')
       .update({ match_status: 'ignored', matched_order_id: null }).eq('id', depositId)
     return ok({ action, depositId })
   }
 
   if (action === 'unmatch') {
+    if (!(await canManageFarm(deposit.farm_id))) {
+      return fail('이 입금을 처리할 권한이 없습니다.', 403)
+    }
     if (deposit.matched_order_id) {
       // 사람이 되돌리는 것이므로 주문도 입금대기로 돌린다.
       await db.from('orders').update({
@@ -56,6 +68,13 @@ export const matchDeposit: FnHandler = async ({ userId, body, admin }) => {
     .select('id, order_no, farm_id, status, deposit_due_amount').eq('id', orderId).maybeSingle()
   if (!order) return fail('주문을 찾을 수 없습니다.', 404)
   if (order.status !== 'pending_deposit') return fail('입금 대기 주문이 아닙니다.')
+
+  if (!(await canManageFarm(order.farm_id))) {
+    return fail('이 주문의 입금을 처리할 권한이 없습니다.', 403)
+  }
+  if (deposit.farm_id && deposit.farm_id !== order.farm_id && !adminUser) {
+    return fail('다른 농가의 입금은 연결할 수 없습니다.', 403)
+  }
 
   // 이미 다른 입금이 붙어 있는 주문인지 확인한다.
   const { data: already } = await db.from('deposit_transactions')

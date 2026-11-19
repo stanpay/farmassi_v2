@@ -1,23 +1,42 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { NavLink, useNavigate } from 'react-router-dom'
+import { copyText } from '../../lib/clipboard'
 import { useNavContext } from './NavContext'
 
 interface HeaderProps {
   title: string
   subtitle?: string
+  /** 부제 옆에 초록색 '주소복사' 표시. 클릭 시 subtitle 복사 */
+  copyableSubtitle?: boolean
   showBack?: boolean
   backTo?: string
   rightElement?: ReactNode
 }
 
-export function Header({ title, subtitle, showBack, backTo, rightElement }: HeaderProps) {
+export function Header({
+  title,
+  subtitle,
+  copyableSubtitle,
+  showBack,
+  backTo,
+  rightElement,
+}: HeaderProps) {
   const navigate = useNavigate()
   const { mobileSettingsItem } = useNavContext()
+  const [copied, setCopied] = useState(false)
 
   const handleBack = () => {
     if (backTo) navigate(backTo, { replace: true })
     else navigate(-1)
+  }
+
+  async function handleCopySubtitle() {
+    if (!subtitle) return
+    const ok = await copyText(subtitle)
+    if (!ok) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
   }
 
   return (
@@ -36,7 +55,20 @@ export function Header({ title, subtitle, showBack, backTo, rightElement }: Head
         )}
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-bold text-gray-900 truncate">{title}</h1>
-          {subtitle && <p className="text-xs text-muted truncate">{subtitle}</p>}
+          {subtitle && (
+            <p className="flex items-center gap-1.5 text-xs text-muted min-w-0">
+              <span className="truncate">{subtitle}</span>
+              {copyableSubtitle && (
+                <button
+                  type="button"
+                  onClick={() => void handleCopySubtitle()}
+                  className="shrink-0 font-medium text-primary hover:underline"
+                >
+                  {copied ? '복사됨' : '주소복사'}
+                </button>
+              )}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {rightElement}

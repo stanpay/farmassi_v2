@@ -2,7 +2,7 @@ import { GripVertical, ImagePlus, Import, Plus, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
-import { Input, Select, Textarea } from '../ui/Field'
+import { Field, Input, Select, Textarea } from '../ui/Field'
 import { ErrorText } from '../ui/Feedback'
 import {
   KPOST_CONTENT_CODES,
@@ -13,9 +13,11 @@ import {
   kpostWeightLabel,
 } from '../../lib/kpostParcelExcel'
 import { PriceTag, discountRate } from './PriceTag'
+import { normalizeTiers } from '../../lib/shippingFee'
 import { deletePublicImage, preparePublicImage, uploadFarmImage } from '../../lib/storageImages'
 import { PRODUCT_IMAGE_ASPECT } from '../../lib/imageCrop'
 import { supabase } from '../../lib/supabase'
+import { useAuth } from '../../lib/auth'
 import {
   PRODUCT_SALE_STATUS_LABEL,
   PRODUCT_SALE_STATUS_OPTIONS,
@@ -48,7 +50,11 @@ interface ProductFormValues {
   price: string
   /** 할인 전 원래 가격. 빈 문자열이면 할인 없음. */
   list_price: string
+  /** 수량 구간별 배송비 */
+  shipping_fees: { qty: number; fee: number }[]
   unit: string
+  /** 저장돼 있던 원래 단위. kg 이 아니었으면 알려 주려고 들고 있는다. */
+  legacyUnit?: string
   description: string
   image_url: string
   parcel_weight_kg: string
@@ -91,6 +97,7 @@ const emptyProductForm: ProductFormValues = {
   name: '',
   price: '',
   list_price: '',
+  shipping_fees: [],
   unit: '5',
   description: '',
   image_url: '',
@@ -110,8 +117,12 @@ function productToForm(product: Product): ProductFormValues {
     name: product.name,
     price: String(product.price),
     list_price: product.list_price === null ? '' : String(product.list_price),
+    shipping_fees: normalizeTiers(product.shipping_fees),
     // 박스·개 등 비-kg 값은 택배 중량으로 바꿔 kg 숫자만 쓴다.
     unit: String(unitKg ?? (Number(parcel_weight_kg) || 5)),
+    // 원래 값이 kg 이 아니었으면 화면에서 알려 준다. 말없이 바꿔 저장하면
+    // '25개' 로 팔던 상품이 어느 순간 5kg 이 돼 있다.
+    legacyUnit: unitKg == null ? product.unit?.trim() || undefined : undefined,
     description: product.description ?? '',
     image_url: product.image_url ?? '',
     parcel_weight_kg,
@@ -131,6 +142,7 @@ function formPayload(form: ProductFormValues) {
     price: Number(form.price),
     // 비워 두면 할인 없음. 0 을 넣어도 할인으로 치지 않는다(표시 조건이 price 초과).
     list_price: form.list_price.trim() === '' ? null : Number(form.list_price),
+    shipping_fees: normalizeTiers(form.shipping_fees),
     unit: formatUnitKg(unitKg),
     description: form.description.trim() || null,
     parcel_weight_kg: form.parcel_weight_kg,
@@ -223,9 +235,15 @@ function ProductFormCard({
           }}
           placeholder="예: 5"
         />
-        <p className="mt-1 text-xs text-muted">
-          kg 숫자만 입력합니다. &quot;박스&quot;·&quot;개&quot; 같은 값은 저장되지 않습니다.
-        </p>
+        {form.legacyUnit ? (
+          <p className="mt-1 text-xs text-amber-700">
+            원래 단위는 &quot;{form.legacyUnit}&quot; 였습니다. 저장하면 위의 kg 값으로 바뀝니다.
+          </p>
+        ) : (
+          <p className="mt-1 text-xs text-muted">
+            kg 숫자만 입력합니다. &quot;박스&quot;·&quot;개&quot; 같은 값은 저장되지 않습니다.
+          </p>
+        )}
       </div>
       <Textarea label="설명" value={form.description} onChange={(e) => onChange('description', e.target.value)} />
       <div className="grid grid-cols-2 gap-3">
@@ -281,11 +299,74 @@ function ProductFormCard({
       */}
       <div className="rounded-xl bg-gray-50 px-3 py-2.5 text-xs leading-relaxed text-muted">
         <p className="font-medium text-gray-700">우체국 요금 참고</p>
-        <p className="mt-1">
+        {/*
+          구간별 요금표. 어떤 중량·부피를 고르면 얼마인지 숫자만 봐서는 알 수
+          없어서 요청받은 표를 그대로 둔다. 폭은 위 이미지 영역과 같게 폼 전체를
+          쓰고, 비율은 그대로 둔다. 560px 보다 좁아지면 글씨가 뭉개지므로 그때만
+          옆으로 넘겨 본다.
+        */}
+        <div className="mt-1.5 overflow-x-auto">
+          <img
+            src="/reference/kpost-fee-table.png"
+            alt="우체국 등기소포 요금표 — 부피 80cm 이하부터 160cm, 중량 3kg 이하부터 30kg 구간별 요금"
+            className="h-auto w-full min-w-[560px] rounded-lg border border-gray-200 bg-white"
+            loading="lazy"
+          />
+        </div>
+        <p className="mt-1.5">
           포도 · 3kg/100 4,500원 · 7kg/100 5,000원 · 15kg/120 7,000원 · 20kg/120 11,000원
         </p>
         <p>즙 · 1box 5,000원 · 2box 7,000원 · 3box 8,000원</p>
       </div>
+      <Field label="수량별 배송비">
+        <div className="mt-1 space-y-1.5">
+          {form.shipping_fees.map((tier, index) => (
+            <div key={index} className="flex items-center gap-2 text-sm">
+              <input
+                type="number"
+                min={1}
+                value={tier.qty}
+                onChange={(e) => onChange('shipping_fees', form.shipping_fees.map((t, i) =>
+                  i === index ? { ...t, qty: Number(e.target.value) } : t))}
+                className="w-16 rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
+              />
+              <span className="text-xs text-muted">개까지</span>
+              <input
+                type="number"
+                min={0}
+                step={100}
+                value={tier.fee}
+                onChange={(e) => onChange('shipping_fees', form.shipping_fees.map((t, i) =>
+                  i === index ? { ...t, fee: Number(e.target.value) } : t))}
+                className="w-24 rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
+              />
+              <span className="text-xs text-muted">원</span>
+              <button
+                type="button"
+                onClick={() => onChange('shipping_fees', form.shipping_fees.filter((_, i) => i !== index))}
+                className="ml-auto text-xs text-muted hover:text-red-600"
+              >
+                삭제
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => onChange('shipping_fees', [
+              ...form.shipping_fees,
+              { qty: (form.shipping_fees.at(-1)?.qty ?? 0) + 1, fee: 0 },
+            ])}
+            className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
+          >
+            + 구간 추가
+          </button>
+        </div>
+        <p className="mt-1.5 text-xs text-muted">
+          {form.shipping_fees.length === 0
+            ? '비워 두면 배송비를 따로 받지 않습니다 (상품가에 포함).'
+            : '수량이 늘어도 배송비는 비례하지 않습니다. 마지막 구간을 넘으면 그 구간이 되풀이됩니다.'}
+        </p>
+      </Field>
       <div className="grid grid-cols-2 gap-3">
         <Select
           label="택배 중량(kg)"
@@ -462,6 +543,7 @@ interface ProductManagerProps {
 
 export function ProductManager({ farmId, variant = 'admin', onCountChange }: ProductManagerProps) {
   const isFarm = variant === 'farm'
+  const { isAdmin } = useAuth()
   const [products, setProducts] = useState<Product[]>([])
   const [form, setForm] = useState<ProductFormValues>(emptyProductForm)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -753,10 +835,18 @@ export function ProductManager({ farmId, variant = 'admin', onCountChange }: Pro
               <Plus className="h-4 w-4" />
               새 상품 추가
             </Button>
-            <Button type="button" variant="outline" disabled={reordering} onClick={() => setImportOpen(true)}>
-              <Import className="h-4 w-4" />
-              불러오기
-            </Button>
+            {/*
+              불러오기는 남의 농가 상품까지 훑는다. 농가 사람에게는 보이면
+              안 되므로 실제 권한(role=admin)으로 가른다. 농가 작업공간을
+              관리자가 열었을 때는 그대로 쓸 수 있어야 해서 variant 로는
+              가르지 않는다.
+            */}
+            {isAdmin && (
+              <Button type="button" variant="outline" disabled={reordering} onClick={() => setImportOpen(true)}>
+                <Import className="h-4 w-4" />
+                불러오기
+              </Button>
+            )}
           </div>
           {products.length > 1 && (
             <Button variant={reordering ? 'primary' : 'outline'} onClick={toggleReorder}>

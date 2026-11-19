@@ -23,12 +23,20 @@ export function farmLandingPath(slug: string) {
   return `/farm/${slug}/landingpage`
 }
 
+export function farmQrPath(slug: string) {
+  return `/farm/${slug}/qr`
+}
+
 export function farmPublicOrigin() {
   return BRAND.siteUrl.replace(/\/+$/, '')
 }
 
 export function farmLandingUrl(slug: string, origin = farmPublicOrigin()) {
   return `${origin.replace(/\/+$/, '')}${farmLandingPath(slug)}`
+}
+
+export function farmQrUrl(slug: string, origin = farmPublicOrigin()) {
+  return `${origin.replace(/\/+$/, '')}${farmQrPath(slug)}`
 }
 
 export function farmProductLines(summary: string | null | undefined) {

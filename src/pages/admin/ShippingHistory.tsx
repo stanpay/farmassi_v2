@@ -3,6 +3,7 @@ import {
   autoCountFarmassi, loadFarms, loadFarmProducts, loadMonth, saveDay,
   type HistoryFarm,
 } from '../../lib/shippingHistory'
+import { loadDemoFarmOrders } from '../../lib/demoFarmOrders'
 import { isSundayYmd, shortHolidayName, useHolidays } from '../../lib/useHolidays'
 import { useUnsavedGuard } from '../../lib/useUnsavedGuard'
 import {
@@ -21,18 +22,24 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog'
 import { adminNavItems } from '../../config/adminNav'
-import { todayInSeoul } from '../../lib/deliveryEstimate'
-import { WEEKDAYS, deliveryDaysLabel } from '../../lib/deliveryDays'
+import { pauseCovering, todayInSeoul, type PauseRange } from '../../lib/deliveryEstimate'
+import { supabase } from '../../lib/supabase'
+import { WEEKDAYS, deliveryDaysLabel, writeDaysLabel } from '../../lib/deliveryDays'
 import { formatPrice } from '../../lib/format'
 
 /** 송장 대행 1건당 수익 (원) */
 const FEE_PER_SHIPMENT = 500
 
-/** 접수 채널 — 엑셀 행과 동일 */
+/** 접수 채널 — 엑셀 행과 동일. 관리자 화면 기준. */
 const CHANNELS = ['직접연락', '카톡 비즈니스', '팜어시'] as const
 type Channel = (typeof CHANNELS)[number]
 
+/** 농가 화면에서는 카톡 비즈니스를 직접연락에 합쳐 숨긴다. */
+const FARM_CHANNELS = ['직접연락', '팜어시'] as const satisfies readonly Channel[]
+
 const AUTO_CHANNEL: Channel = '팜어시'
+const KAKAO_CHANNEL: Channel = '카톡 비즈니스'
+const DIRECT_CHANNEL: Channel = '직접연락'
 
 interface FarmCell {
   count: number
@@ -82,7 +89,9 @@ function emptyProductQty(
   return Object.fromEntries(
     farms.map((farm) => [
       farm.id,
-      Object.fromEntries((farmProducts[farm.id] ?? []).map((p) => [p.name, 0])),
+      // 화면 키는 상품 id 다 (bumpProductQty, loadMonth 와 같다). 이름으로 채우면 수량을
+      // 고칠 때 id 키가 따로 생겨, 저장할 때 같은 상품 이름이 두 번 upsert 된다.
+      Object.fromEntries((farmProducts[farm.id] ?? []).map((p) => [p.id, 0])),
     ]),
   )
 }
@@ -122,11 +131,101 @@ function createEmptyDay(
 }
 
 
-function farmDayTotal(cells: Record<Channel, FarmCell> | undefined): number {
+function farmDayTotal(
+  cells: Record<Channel, FarmCell> | undefined,
+  channels: readonly Channel[] = CHANNELS,
+): number {
   // 농가가 아직 안 읽혔거나 새로 생긴 농가면 칸이 없다. 없으면 0 으로 본다 —
   // 여기서 터지면 페이지 전체가 흰 화면이 된다.
   if (!cells) return 0
-  return CHANNELS.reduce((sum, ch) => sum + (cells[ch]?.count ?? 0), 0)
+  return channels.reduce((sum, ch) => sum + (cells[ch]?.count ?? 0), 0)
+}
+
+/** 농가 화면용: 카톡 비즈니스 건수·접수번호를 직접연락에 합친다. */
+function mergeKakaoIntoDirect(day: DayRecord, farmIds: string[]): DayRecord {
+  const cells = { ...day.cells }
+  for (const farmId of farmIds) {
+    const farmCells = cells[farmId]
+    if (!farmCells) continue
+    const kakao = farmCells[KAKAO_CHANNEL] ?? emptyCell()
+    if (!kakao.count && !kakao.receiptText) {
+      cells[farmId] = { ...farmCells, [KAKAO_CHANNEL]: emptyCell() }
+      continue
+    }
+    const direct = farmCells[DIRECT_CHANNEL] ?? emptyCell()
+    const receiptParts = [direct.receiptText, kakao.receiptText].map((s) => s.trim()).filter(Boolean)
+    cells[farmId] = {
+      ...farmCells,
+      [DIRECT_CHANNEL]: {
+        count: direct.count + kakao.count,
+        receiptText: receiptParts.join(', '),
+      },
+      [KAKAO_CHANNEL]: emptyCell(),
+    }
+  }
+  return { ...day, cells }
+}
+
+/**
+ * 세션 더미 주문 → 팜어시 자동 건수·팔린 물건.
+ * created_at 서울 날짜 기준. 사람이 이미 적은 값은 덮지 않는다.
+ */
+function applyDemoFarmassi(
+  byDate: Map<string, DayRecord>,
+  farms: HistoryFarm[],
+  farmProducts: Record<string, { id: string; name: string }[]>,
+  monthPrefix: string,
+  /** 주면 더미 주문을 전부 이 날짜에 넣는다 (농가 화면·오늘). */
+  forceDate?: string,
+): Record<string, { id: string; name: string }[]> {
+  const nextProducts = { ...farmProducts }
+  for (const farm of farms) {
+    const demos = loadDemoFarmOrders(farm.id)
+    if (demos.length === 0) continue
+
+    const productList = [...(nextProducts[farm.id] ?? [])]
+    const ensureProduct = (name: string) => {
+      if (productList.some((p) => p.id === name || p.name === name)) return name
+      productList.push({ id: name, name })
+      return name
+    }
+
+    const byDayOrders = new Map<string, ReturnType<typeof loadDemoFarmOrders>>()
+    for (const order of demos) {
+      const date = forceDate
+        ?? new Date(order.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' })
+      if (!date.startsWith(monthPrefix)) continue
+      const list = byDayOrders.get(date) ?? []
+      list.push(order)
+      byDayOrders.set(date, list)
+    }
+
+    for (const [date, orders] of byDayOrders) {
+      const day = byDate.get(date) ?? createEmptyDay(date, farms, nextProducts)
+      const cells = (day.cells[farm.id] ??= emptyFarmCells())
+      if (cells[AUTO_CHANNEL].count === 0) {
+        cells[AUTO_CHANNEL] = { count: orders.length, receiptText: '' }
+      }
+      const qty = { ...(day.productQty[farm.id] ?? {}) }
+      if (productQtySum(qty) === 0) {
+        for (const order of orders) {
+          for (const item of order.order_items ?? []) {
+            const name = (item.product_name || '기타').trim()
+            const key = ensureProduct(name)
+            qty[key] = (qty[key] ?? 0) + (item.quantity ?? 0)
+          }
+        }
+        day.productQty = {
+          ...day.productQty,
+          [farm.id]: clampFarmProductQty(qty, farmDayTotal(cells)),
+        }
+      }
+      day.cells = { ...day.cells, [farm.id]: cells }
+      byDate.set(date, day)
+    }
+    nextProducts[farm.id] = productList
+  }
+  return nextProducts
 }
 
 function formatDisplayDate(iso: string): string {
@@ -135,12 +234,28 @@ function formatDisplayDate(iso: string): string {
   return `${y}.${m}.${d}. (${weekday})`
 }
 
-function farmCanShipOn(farm: HistoryFarm, iso: string): boolean {
+/**
+ * 이 날짜에 이 농가의 이력을 적을 수 있는가.
+ *
+ * 이력은 물건이 나가기 전날 적는다. 그래서 그날이 배송 요일인지가 아니라
+ * '다음날' 이 배송 요일인지를 본다. 월·수·금 배송이면 일·화·목에 적는다.
+ */
+function farmWritableOn(
+  farm: HistoryFarm,
+  iso: string,
+  pauses: PauseRange[] = [],
+): boolean {
+  const [y, m, d] = iso.split('-').map(Number)
+  const next = new Date(y, m - 1, d + 1)
+  const nextIso = ymd(next.getFullYear(), next.getMonth() + 1, next.getDate())
+
+  // 나가는 날이 정지 기간이면 적을 것도 없다.
+  if (pauseCovering(pauses, nextIso)) return false
+
   // 배송 요일을 정하지 않은 농가는 제한이 없는 것으로 본다. 빈 배열을
   // '아무 요일도 안 됨' 으로 읽으면 그 농가는 이력을 아예 적을 수 없다.
   if (farm.deliveryDays.length === 0) return true
-  const [y, m, d] = iso.split('-').map(Number)
-  return farm.deliveryDays.includes(new Date(y, m - 1, d).getDay())
+  return farm.deliveryDays.includes(next.getDay())
 }
 
 function monthKey(year: number, month: number): string {
@@ -170,6 +285,9 @@ async function downloadMonthExcel(
   month: number,
   monthDays: DayRecord[],
   farms: HistoryFarm[],
+  /** 파일 이름에 붙일 농가 이름. 전체를 받을 때는 빈 문자열. */
+  farmLabel = '',
+  channels: readonly Channel[] = CHANNELS,
 ) {
   if (monthDays.length === 0) throw new Error('다운로드할 이력이 없습니다.')
 
@@ -186,9 +304,9 @@ async function downloadMonthExcel(
     const [y, m, d] = day.date.split('-').map(Number)
     sheet.addRow([`${y}.${m}.${d}.`, ...farms.flatMap(() => ['', '']), ''])
 
-    for (const channel of CHANNELS) {
+    for (const channel of channels) {
       const dayGrand = farms.reduce(
-        (sum, farm) => sum + farmDayTotal(day.cells[farm.id]),
+        (sum, farm) => sum + farmDayTotal(day.cells[farm.id], channels),
         0,
       )
       const row: (string | number)[] = [channel]
@@ -226,7 +344,7 @@ async function downloadMonthExcel(
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `송장대행이력_${year}-${String(month).padStart(2, '0')}.xlsx`
+  link.download = `송장대행이력${farmLabel ? `_${farmLabel}` : ''}_${year}-${String(month).padStart(2, '0')}.xlsx`
   link.click()
   URL.revokeObjectURL(url)
 }
@@ -236,10 +354,26 @@ const countInputClass =
 const receiptInputClass =
   'w-full min-w-[10rem] rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-muted outline-none focus:border-primary focus:ring-1 focus:ring-primary'
 
-export function AdminShippingHistory() {
+/**
+ * 배송이력 본문.
+ *
+ * 관리자는 전체 농가, 농가 워크스페이스는 scopedFarm 한 곳만 본다.
+ * AppShell 은 호출 쪽에서 감싼다 — 농가 레이아웃이 이미 셸을 쓰고 있다.
+ */
+export function ShippingHistoryContent({
+  scopedFarm,
+  backTo,
+}: {
+  scopedFarm?: HistoryFarm
+  backTo: string
+}) {
   const today = todayInSeoul()
+  const singleFarm = Boolean(scopedFarm)
+  /** 농가 페이지: 카톡 비즈니스 행 숨김. 관리자는 전체 채널. */
+  const visibleChannels: readonly Channel[] = singleFarm ? FARM_CHANNELS : CHANNELS
+  const scopedFarmId = scopedFarm?.id
   // 실데이터. 더미 상수는 첫 로딩 전 잠깐만 쓰인다.
-  const [farms, setFarms] = useState<HistoryFarm[]>([])
+  const [farms, setFarms] = useState<HistoryFarm[]>(scopedFarm ? [scopedFarm] : [])
   const [farmProducts, setFarmProducts] = useState<Record<string, { id: string; name: string }[]>>({})
   const [loadError, setLoadError] = useState('')
   const [viewYear, setViewYear] = useState(() => Number(today.slice(0, 4)))
@@ -258,9 +392,14 @@ export function AdminShippingHistory() {
     farmName: string
   } | null>(null)
   const [exportBusy, setExportBusy] = useState(false)
+  /** 엑셀로 내려받을 농가. 빈 문자열이면 전체. 농가 화면은 자기 농가만. */
+  const [exportFarmId, setExportFarmId] = useState(scopedFarm?.id ?? '')
   const [exportError, setExportError] = useState('')
   /** 팔린 물건 전체 펼침 — `${date}:${farmId}` */
   const [expandedProducts, setExpandedProducts] = useState<Set<string>>(() => new Set())
+
+  /** 농가별 배송 일시정지 구간 (보고 있는 달과 겹치는 것만) */
+  const [pauses, setPauses] = useState<Record<string, PauseRange[]>>({})
 
   const viewMonthKey = monthKey(viewYear, viewMonth)
   // 달력에 공휴일을 빨갛게 보여준다. 배송 일시정지 달력과 같은 훅을 쓴다.
@@ -271,6 +410,14 @@ export function AdminShippingHistory() {
     let alive = true
     void (async () => {
       try {
+        if (scopedFarm) {
+          setFarms([scopedFarm])
+          setExportFarmId(scopedFarm.id)
+          const p = await loadFarmProducts()
+          if (!alive) return
+          setFarmProducts({ [scopedFarm.id]: p[scopedFarm.id] ?? [] })
+          return
+        }
         const [f, p] = await Promise.all([loadFarms(), loadFarmProducts()])
         if (!alive) return
         setFarms(f)
@@ -280,34 +427,92 @@ export function AdminShippingHistory() {
       }
     })()
     return () => { alive = false }
-  }, [])
+  }, [scopedFarmId, scopedFarm])
+
+  // 보고 있는 달과 겹치는 정지 구간만 가져온다. 지난 달을 볼 수도 있어서
+  // '오늘 이후' 로 자르면 안 된다.
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const first = `${viewMonthKey}-01`
+      const last = ymd(viewYear, viewMonth, daysInMonth(viewYear, viewMonth))
+      let query = supabase
+        .from('shipping_pauses')
+        .select('farm_id, start_date, end_date, reason')
+        .lte('start_date', last)
+        .gte('end_date', first)
+      if (scopedFarmId) query = query.eq('farm_id', scopedFarmId)
+      const { data } = await query
+      if (!alive) return
+      const byFarm: Record<string, PauseRange[]> = {}
+      for (const row of (data ?? []) as any[]) {
+        (byFarm[row.farm_id] ??= []).push(row)
+      }
+      setPauses(byFarm)
+    })()
+    return () => { alive = false }
+  }, [viewYear, viewMonth, viewMonthKey, scopedFarmId])
 
   // 달을 옮길 때마다 그 달 이력을 읽는다. 팜어시 채널은 저장된 값이 없으면
   // 주문 수로 채운다 — 사람이 고친 값은 덮지 않는다.
   useEffect(() => {
     if (farms.length === 0) return
     let alive = true
+
+    // API 가 느리거나 죽어도 1일~오늘 카드는 바로 깐다. 안 그러면
+    // '이력이 없습니다' 만 보이고 관리자 화면처럼 입력할 수 없다.
+    const seed = new Map<string, DayRecord>()
+    if (`${viewMonthKey}-01` <= today) {
+      const lastDay = Math.min(
+        daysInMonth(viewYear, viewMonth),
+        today.startsWith(viewMonthKey) ? Number(today.slice(8)) : daysInMonth(viewYear, viewMonth),
+      )
+      for (let d = 1; d <= lastDay; d += 1) {
+        const date = ymd(viewYear, viewMonth, d)
+        if (date > today) break
+        seed.set(date, createEmptyDay(date, farms, farmProducts))
+      }
+    }
+
+    // 농가 화면: 세션 더미 주문을 오늘 팜어시·팔린 물건에 바로 넣는다.
+    let productsForSeed = farmProducts
+    if (singleFarm) {
+      productsForSeed = applyDemoFarmassi(seed, farms, farmProducts, viewMonthKey, today)
+      const farmIds = farms.map((f) => f.id)
+      for (const [date, day] of [...seed.entries()]) {
+        seed.set(date, mergeKakaoIntoDirect(day, farmIds))
+      }
+    }
+    setDays([...seed.values()].sort((a, b) => b.date.localeCompare(a.date)))
+
     void (async () => {
       try {
         const [saved, auto] = await Promise.all([
-          loadMonth(viewYear, viewMonth, farms, farmProducts),
+          loadMonth(viewYear, viewMonth, farms, productsForSeed),
           autoCountFarmassi(viewYear, viewMonth),
         ])
         if (!alive) return
-        const byDate = new Map(saved.map((d) => [d.date, d]))
+        const byDate = new Map(seed)
+        const farmIdsList = farms.map((f) => f.id)
+        const farmIds = new Set(farmIdsList)
+        for (const day of saved) {
+          byDate.set(day.date, singleFarm ? mergeKakaoIntoDirect(day, farmIdsList) : day)
+        }
         for (const [date, perFarm] of Object.entries(auto)) {
           if (!date.startsWith(viewMonthKey)) continue
-          const day = byDate.get(date) ?? createEmptyDay(date, farms, farmProducts)
+          const day = byDate.get(date) ?? createEmptyDay(date, farms, productsForSeed)
           for (const [farmId, count] of Object.entries(perFarm)) {
+            if (!farmIds.has(farmId)) continue
             const cells = (day.cells[farmId] ??= emptyFarmCells())
             if (cells[AUTO_CHANNEL].count === 0) cells[AUTO_CHANNEL] = { count, receiptText: '' }
           }
-          byDate.set(date, day)
+          byDate.set(date, singleFarm ? mergeKakaoIntoDirect(day, farmIdsList) : day)
         }
-        // 오늘 카드는 저장된 값이 없어도 항상 있어야 한다. 바로 입력할 수
-        // 있어야 하기 때문이다. 이 달을 보고 있을 때만 만든다.
-        if (today.startsWith(viewMonthKey) && !byDate.has(today)) {
-          byDate.set(today, createEmptyDay(today, farms, farmProducts))
+        if (singleFarm) {
+          applyDemoFarmassi(byDate, farms, productsForSeed, viewMonthKey, today)
+          for (const [date, day] of [...byDate.entries()]) {
+            byDate.set(date, mergeKakaoIntoDirect(day, farmIdsList))
+          }
         }
         setDays([...byDate.values()].sort((a, b) => b.date.localeCompare(a.date)))
       } catch (err) {
@@ -315,7 +520,7 @@ export function AdminShippingHistory() {
       }
     })()
     return () => { alive = false }
-  }, [farms, farmProducts, viewYear, viewMonth, viewMonthKey])
+  }, [farms, farmProducts, viewYear, viewMonth, viewMonthKey, today, singleFarm])
 
   // 오늘이 속한 달로 맞춰 둔다 (월이 바뀌면 새 페이지)
   useEffect(() => {
@@ -332,6 +537,36 @@ export function AdminShippingHistory() {
     () => Object.fromEntries(days.map((d) => [d.date, d])),
     [days],
   )
+
+  /**
+   * 날짜별 정지 막대.
+   *
+   * 연속한 칸이 이어져 보여야 하므로 시작·끝 칸만 둥글게 깎고 가운데는
+   * 각지게 둔다. 농원 이름은 시작 칸과 주가 바뀌는 일요일에만 적는다 —
+   * 매 칸에 적으면 이름이 잘려서 읽을 수가 없다.
+   */
+  const pauseBars = useMemo(() => {
+    const byDate: Record<string, { farmId: string; farmName: string; start: boolean; end: boolean; label: string }[]> = {}
+    const count = daysInMonth(viewYear, viewMonth)
+    for (const farm of farms) {
+      for (const pause of pauses[farm.id] ?? []) {
+        for (let d = 1; d <= count; d += 1) {
+          const date = ymd(viewYear, viewMonth, d)
+          if (date < pause.start_date || date > pause.end_date) continue
+          const start = date === pause.start_date
+          const weekStart = new Date(viewYear, viewMonth - 1, d).getDay() === 0
+          ;(byDate[date] ??= []).push({
+            farmId: farm.id,
+            farmName: farm.name,
+            start,
+            end: date === pause.end_date,
+            label: start || weekStart ? farm.name : '',
+          })
+        }
+      }
+    }
+    return byDate
+  }, [farms, pauses, viewYear, viewMonth])
 
   const calendarCells = useMemo(() => {
     const firstWeekday = new Date(viewYear, viewMonth - 1, 1).getDay()
@@ -361,7 +596,7 @@ export function AdminShippingHistory() {
     if (!day) return false
     setSavingDate(date)
     setLoadError('')
-    const err = await saveDay(date, day, farms, farmProducts)
+    const err = await saveDay(date, day, farms, farmProducts, visibleChannels)
     setSavingDate(null)
     if (err) {
       setLoadError(`저장하지 못했습니다: ${err}`)
@@ -504,7 +739,14 @@ export function AdminShippingHistory() {
     setExportError('')
     setExportBusy(true)
     try {
-      await downloadMonthExcel(viewYear, viewMonth, monthDays, farms)
+      // 농가를 고르면 그 농가 칸만 담는다. 정산은 농가별로 하기 때문이다.
+      const picked = exportFarmId ? farms.filter((f) => f.id === exportFarmId) : farms
+      if (picked.length === 0) throw new Error('농가를 찾지 못했습니다.')
+      await downloadMonthExcel(
+        viewYear, viewMonth, monthDays, picked,
+        exportFarmId ? picked[0].name : '',
+        visibleChannels,
+      )
     } catch (err) {
       setExportError(err instanceof Error ? err.message : '엑셀을 만들지 못했습니다.')
     } finally {
@@ -513,12 +755,16 @@ export function AdminShippingHistory() {
   }
 
   return (
-    <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
+    <>
       <Header
         title="배송이력 관리"
-        subtitle={`${viewYear}년 ${viewMonth}월 · 더미 (로컬만, 저장 없음)`}
+        subtitle={
+          singleFarm && scopedFarm
+            ? `${scopedFarm.name} · ${viewYear}년 ${viewMonth}월`
+            : `${viewYear}년 ${viewMonth}월`
+        }
         showBack
-        backTo="/admin/shipments"
+        backTo={backTo}
       />
       <div className="px-4 py-4 md:px-6 max-w-6xl mx-auto space-y-4">
         <Card className="space-y-3">
@@ -560,15 +806,20 @@ export function AdminShippingHistory() {
               // 공휴일과 일요일은 우체국이 쉬는 날이라 같은 색으로 묶는다.
               const restDay = Boolean(holidayName) || isSundayYmd(date)
               const clickable = Boolean(record)
+              const bars = pauseBars[date] ?? []
               return (
                 <button
                   key={date}
                   type="button"
                   disabled={!clickable}
                   onClick={() => scrollToDay(date)}
-                  title={holidayName ?? undefined}
+                  title={
+                    [holidayName, ...bars.map((b) => `${b.farmName} 배송 일시정지`)]
+                      .filter(Boolean)
+                      .join(' · ') || undefined
+                  }
                   className={[
-                    'relative flex h-11 w-full flex-col items-center justify-center rounded-xl text-sm leading-none',
+                    'relative flex h-14 w-full flex-col items-center justify-start gap-0.5 rounded-xl pt-1.5 text-sm leading-none',
                     clickable ? 'hover:bg-primary-light/60' : 'cursor-default',
                     isToday ? 'font-semibold text-primary' : restDay ? 'text-red-600' : 'text-gray-800',
                     !clickable && !isToday && !restDay ? 'text-gray-300' : '',
@@ -583,8 +834,29 @@ export function AdminShippingHistory() {
                       {shortHolidayName(holidayName)}
                     </span>
                   )}
-                  {hasWork && (
-                    <span className="absolute bottom-0.5 h-1 w-1 rounded-full bg-primary" />
+                  {hasWork && <span className="h-1 w-1 rounded-full bg-primary" />}
+                  {bars.length > 0 && (
+                    <span className="absolute inset-x-0 bottom-0.5 flex flex-col gap-px">
+                      {bars.slice(0, 2).map((bar) => (
+                        <span
+                          key={`${bar.farmId}-${date}`}
+                          className={[
+                            'h-3 truncate bg-amber-200 px-1 text-[8px] font-normal leading-3 text-amber-900',
+                            bar.start ? 'ml-0.5 rounded-l-full' : '',
+                            bar.end ? 'mr-0.5 rounded-r-full' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                        >
+                          {bar.label}
+                        </span>
+                      ))}
+                      {bars.length > 2 && (
+                        <span className="text-[8px] leading-3 text-amber-800">
+                          +{bars.length - 2}
+                        </span>
+                      )}
+                    </span>
                   )}
                 </button>
               )
@@ -599,16 +871,31 @@ export function AdminShippingHistory() {
           <p className="text-sm text-muted">
             {viewYear}년 {viewMonth}월 송장 대행 이력
           </p>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={exportBusy || monthDays.length === 0}
-            onClick={() => void handleExcelDownload()}
-          >
-            <Download className="h-4 w-4" />
-            엑셀 다운로드
-          </Button>
+          <div className="flex items-center gap-2">
+            {!singleFarm && (
+              <select
+                className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-primary"
+                value={exportFarmId}
+                onChange={(e) => setExportFarmId(e.target.value)}
+                aria-label="엑셀로 내려받을 농가"
+              >
+                <option value="">전체 농가</option>
+                {farms.map((farm) => (
+                  <option key={farm.id} value={farm.id}>{farm.name}</option>
+                ))}
+              </select>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={exportBusy || monthDays.length === 0}
+              onClick={() => void handleExcelDownload()}
+            >
+              <Download className="h-4 w-4" />
+              엑셀 다운로드
+            </Button>
+          </div>
         </div>
         {exportError && <p className="text-sm text-red-600">{exportError}</p>}
         {loadError && <p className="text-sm text-red-600">{loadError}</p>}
@@ -627,6 +914,11 @@ export function AdminShippingHistory() {
               <p className="text-xs text-muted">
                 배송요일 {deliveryDaysLabel(farm.deliveryDays) || '미설정'}
               </p>
+              {farm.deliveryDays.length > 0 && (
+                <p className="text-xs text-muted">
+                  작성요일 {writeDaysLabel(farm.deliveryDays)}
+                </p>
+              )}
               <p className="text-sm font-semibold text-primary">
                 {formatPrice(total * FEE_PER_SHIPMENT)}
               </p>
@@ -684,8 +976,8 @@ export function AdminShippingHistory() {
                     )}
                   </div>
                   <p className="text-xs text-muted mt-0.5">
-                    배송 가능 농원:{' '}
-                    {farms.filter((f) => farmCanShipOn(f, day.date))
+                    작성 가능 농원:{' '}
+                    {farms.filter((f) => farmWritableOn(f, day.date, pauses[f.id]))
                       .map((f) => f.name)
                       .join(', ') || '없음'}
                   </p>
@@ -749,20 +1041,20 @@ export function AdminShippingHistory() {
                     <tr className="bg-gray-50 text-left text-muted">
                       <th className="px-3 py-2 font-medium">채널</th>
                       {farms.map((farm) => {
-                        const canShip = farmCanShipOn(farm, day.date)
+                        const canWrite = farmWritableOn(farm, day.date, pauses[farm.id])
                         const offOpen = isOffDayUnlocked(day.date, farm.id)
                         return (
                           <th key={farm.id} className="px-3 py-2 font-medium align-top" colSpan={2}>
                             <div className="flex flex-col gap-1">
                               <span>
                                 {farm.name}
-                                {!canShip && (
+                                {!canWrite && (
                                   <span className="ml-1 text-xs font-normal text-amber-700">
-                                    (요일 외)
+                                    (작성일 외)
                                   </span>
                                 )}
                               </span>
-                              {!canShip && editable && !offOpen && (
+                              {!canWrite && editable && !offOpen && (
                                 <button
                                   type="button"
                                   className="w-fit text-left text-xs font-normal text-primary hover:underline"
@@ -777,7 +1069,7 @@ export function AdminShippingHistory() {
                                   수동 수정…
                                 </button>
                               )}
-                              {!canShip && offOpen && (
+                              {!canWrite && offOpen && (
                                 <button
                                   type="button"
                                   className="w-fit text-left text-xs font-normal text-muted hover:underline"
@@ -810,7 +1102,7 @@ export function AdminShippingHistory() {
                     </tr>
                   </thead>
                   <tbody>
-                    {CHANNELS.map((channel) => {
+                    {visibleChannels.map((channel) => {
                       const isAuto = channel === AUTO_CHANNEL
                       return (
                         <tr
@@ -860,9 +1152,9 @@ export function AdminShippingHistory() {
                           </td>
                           {farms.map((farm) => {
                             const cell = day.cells[farm.id]?.[channel] ?? emptyCell()
-                            const canShip = farmCanShipOn(farm, day.date)
+                            const canWrite = farmWritableOn(farm, day.date, pauses[farm.id])
                             const offOpen = isOffDayUnlocked(day.date, farm.id)
-                            const farmOpen = canShip || offOpen
+                            const farmOpen = canWrite || offOpen
                             const cellEditable =
                               farmOpen && (isAuto ? farmassiOpen : editable)
                             const muted = !farmOpen ? 'bg-gray-50/80' : ''
@@ -944,8 +1236,14 @@ export function AdminShippingHistory() {
                         const qtyMap = day.productQty[farm.id] ?? {}
                         const allocated = productQtySum(qtyMap)
                         const remaining = Math.max(0, target - allocated)
+                        const catalog = farmProducts[farm.id] ?? []
                         const products = sortProductsByQty(
-                          farmProducts[farm.id] ?? [],
+                          [
+                            ...catalog,
+                            ...Object.keys(qtyMap)
+                              .filter((id) => !catalog.some((p) => p.id === id))
+                              .map((id) => ({ id, name: id })),
+                          ],
                           qtyMap,
                         )
                         const productExpandKey = `${day.date}:${farm.id}`
@@ -1105,11 +1403,11 @@ export function AdminShippingHistory() {
 
       <ConfirmDialog
         open={offDayUnlockTarget !== null}
-        title="배송 요일이 아닌 농원을 수정할까요?"
+        title="작성일이 아닌 농원을 수정할까요?"
         description={
           <>
-            {offDayUnlockTarget?.farmName}은(는) 이날 배송 가능 요일이 아닙니다. 예외적으로
-            입력하면 일정과 어긋날 수 있습니다. 꼭 필요할 때만 수정하세요.
+            {offDayUnlockTarget?.farmName}은(는) 이날 작성일이 아닙니다 (배송 전날에 적습니다).
+            예외적으로 입력하면 일정과 어긋날 수 있습니다. 꼭 필요할 때만 수정하세요.
           </>
         }
         confirmLabel="그래도 수정"
@@ -1117,6 +1415,14 @@ export function AdminShippingHistory() {
         onConfirm={confirmOffDayUnlock}
         onCancel={() => setOffDayUnlockTarget(null)}
       />
+    </>
+  )
+}
+
+export function AdminShippingHistory() {
+  return (
+    <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
+      <ShippingHistoryContent backTo="/admin/shipments" />
     </AppShell>
   )
 }

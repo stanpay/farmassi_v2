@@ -74,6 +74,8 @@ export interface Farm {
   address_detail: string | null
   map_url: string | null
   share_text: string | null
+  /** 콜백문자 규칙·제외 번호. 자동 발신 스위치는 기기에만 있다. */
+  auto_sms?: Record<string, unknown>
   landing_blocks: FarmLandingBlock[]
   bank_name: string
   account_number: string
@@ -104,6 +106,8 @@ export interface Product {
   price: number
   /** 할인 전 원래 가격. price 보다 클 때만 취소선으로 표시한다. */
   list_price: number | null
+  /** 수량 구간별 배송비 [{qty, fee}]. 빈 배열이면 상품가에 포함(0원). */
+  shipping_fees: { qty: number; fee: number }[]
   unit: string | null
   description: string | null
   image_url: string | null
@@ -162,6 +166,18 @@ export interface Order {
   deposit_confirmed_at: string | null
   deposit_confirmed_by: string | null
   deposit_provider: string | null
+  /** 손님이 적은 입금자명. 자동 대사의 후보로 쓴다. */
+  depositor_name: string | null
+  /** 보내는 분. 받는 분과 다를 수 있어 따로 받는다 (선물). */
+  sender_name: string | null
+  sender_phone: string | null
+  sender_address: string | null
+  sender_zonecode: string | null
+  sender_address_detail: string | null
+  /** 주문 전체 배송비. total_amount 에 이미 포함돼 있다. */
+  shipping_fee: number
+  /** 손님이 고른 출고일. null 이면 가장 이른 출고일에 나간다. */
+  requested_ship_date: string | null
   created_at: string
   updated_at: string
 }

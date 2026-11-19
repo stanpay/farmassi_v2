@@ -6,6 +6,11 @@ export function formatWon(price: number): string {
   return `${price.toLocaleString('ko-KR')}원`
 }
 
+/** 계좌번호에서 하이픈·공백을 제거한다. 복사·QR 링크용. */
+export function normalizeAccountNumber(value: string): string {
+  return value.replace(/-/g, '').replace(/\s/g, '').trim()
+}
+
 export function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat('ko-KR', {
     timeZone: 'Asia/Seoul',
@@ -44,6 +49,19 @@ export function fullAddress(address: string, detail?: string | null, zonecode?: 
   const zip = zonecode ? `[${zonecode}] ` : ''
   const extra = detail ? ` ${detail}` : ''
   return `${zip}${address}${extra}`.trim()
+}
+
+/** 농가 헤더·목록용: 실제 주소가 있으면 우선(우편번호 제외), 없으면 지역명 */
+export function farmDisplayLocation(
+  farm: {
+    location?: string | null
+    address?: string | null
+    address_detail?: string | null
+  },
+  fallback = '',
+): string {
+  const address = fullAddress(farm.address ?? '', farm.address_detail)
+  return address || farm.location?.trim() || fallback
 }
 
 export function kakaoChannelHref(value: string | null | undefined): string | null {

@@ -2,12 +2,14 @@ import { Leaf, LogIn, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Header } from '../components/layout/Header'
+import { SiteFooter } from '../components/layout/SiteFooter'
 import { useLoginSheet } from '../components/auth/LoginSheet'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { PageSpinner } from '../components/ui/Feedback'
 import { BRAND } from '../config/brand'
 import { useAuth } from '../lib/auth'
+import { farmDisplayLocation } from '../lib/format'
 import { supabase } from '../lib/supabase'
 import type { Farm } from '../types/models'
 
@@ -36,7 +38,7 @@ export function Landing() {
     const q = query.trim().toLowerCase()
     if (!q) return farms
     return farms.filter((farm) => {
-      const haystack = [farm.name, farm.location, farm.product_summary]
+      const haystack = [farm.name, farm.location, farm.address, farm.address_detail, farm.product_summary]
         .filter(Boolean)
         .join(' ')
         .toLowerCase()
@@ -45,23 +47,24 @@ export function Landing() {
   }, [farms, query])
 
   return (
-    <div className="min-h-dvh bg-surface">
-      <Header
-        title={BRAND.serviceName}
-        subtitle={BRAND.tagline}
-        rightElement={
-          user ? (
-            <button type="button" onClick={() => void signOut()} className="text-sm text-muted">
-              로그아웃
-            </button>
-          ) : (
-            <button type="button" onClick={() => openLogin()} className="text-sm font-semibold text-primary">
-              로그인
-            </button>
-          )
-        }
-      />
-      <div className="px-4 py-6 md:px-6 max-w-5xl mx-auto space-y-6">
+    <div className="bg-surface">
+      <div className="flex min-h-dvh flex-col">
+        <Header
+          title={BRAND.serviceName}
+          subtitle={BRAND.tagline}
+          rightElement={
+            user ? (
+              <button type="button" onClick={() => void signOut()} className="text-sm text-muted">
+                로그아웃
+              </button>
+            ) : (
+              <button type="button" onClick={() => openLogin()} className="text-sm font-semibold text-primary">
+                로그인
+              </button>
+            )
+          }
+        />
+        <div className="flex-1 px-4 py-6 md:px-6 max-w-5xl mx-auto w-full space-y-6">
         <div className="rounded-2xl bg-primary p-6 text-white">
           <div className="flex items-center gap-2 mb-2">
             <Leaf className="h-5 w-5" />
@@ -113,7 +116,7 @@ export function Landing() {
               {filteredFarms.map((farm) => (
                 <Card key={farm.id}>
                   <p className="font-bold text-gray-900">{farm.name}</p>
-                  <p className="mt-1 text-sm text-muted">{farm.location || '지역 미등록'}</p>
+                  <p className="mt-1 text-sm text-muted">{farmDisplayLocation(farm, '지역 미등록')}</p>
                   {farm.product_summary && (
                     <p className="mt-1 text-sm text-gray-700">{farm.product_summary}</p>
                   )}
@@ -127,7 +130,9 @@ export function Landing() {
             </div>
           )}
         </section>
+        </div>
       </div>
+      <SiteFooter />
     </div>
   )
 }

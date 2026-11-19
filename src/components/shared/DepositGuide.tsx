@@ -3,7 +3,7 @@ import { Check, Copy } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { copyText } from '../../lib/clipboard'
-import { formatWon } from '../../lib/format'
+import { formatWon, normalizeAccountNumber } from '../../lib/format'
 
 interface DepositGuideProps {
   bankName: string
@@ -28,7 +28,7 @@ export function DepositGuide({
   const hasBank = isRegistered(bankName)
 
   async function handleCopy() {
-    const ok = await copyText(accountNumber.trim())
+    const ok = await copyText(normalizeAccountNumber(accountNumber))
     if (!ok) return
     setCopied(true)
     window.setTimeout(() => setCopied(false), 2000)

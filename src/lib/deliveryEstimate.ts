@@ -132,3 +132,60 @@ function formatShort(ymd: string): string {
   const d = toDate(ymd)
   return `${d.getMonth() + 1}월 ${d.getDate()}일`
 }
+
+/**
+ * 이 날짜 다음의 출고일.
+ *
+ * shipDate 를 그대로 쓴다 — 정지·공휴일·요일 규칙을 두 벌로 갖고 있으면
+ * 언젠가 어긋난다. 기준일 다음날부터 다시 찾게 하고, 마감은 이미 반영된
+ * 뒤이므로 넘기지 않는다.
+ */
+export function nextShipDate(
+  ship: string,
+  days: number[],
+  pauses: PauseRange[] = [],
+  holidays: Set<string> = new Set(),
+): string | null {
+  return shipDate(days, pauses, ship, holidays, false)
+}
+
+/**
+ * 이 날짜 이전의 출고일. 가장 이른 출고일(=기본값)보다 앞으로는 못 간다.
+ *
+ * 뒤로 하루씩 물러서며 찾지 않는다. 그렇게 하면 배송 요일이 아닌 날이 잡힌다.
+ * 가장 이른 출고일부터 nextShipDate 로 앞으로 짚어 가며, 목표 바로 앞의 것을
+ * 고른다. 열거를 같은 함수로 하므로 규칙이 어긋날 일이 없다.
+ */
+export function prevShipDate(
+  ship: string,
+  earliest: string,
+  days: number[],
+  pauses: PauseRange[] = [],
+  holidays: Set<string> = new Set(),
+): string | null {
+  if (ship <= earliest) return null
+  let cursor = earliest
+  for (let i = 0; i < 400; i += 1) {
+    const next = nextShipDate(cursor, days, pauses, holidays)
+    if (!next || next >= ship) return cursor
+    cursor = next
+  }
+  return cursor
+}
+
+/** 가장 이른 출고일부터 `count` 개의 출고일. 화면에서 고르게 하려는 것이다. */
+export function shipDateChoices(
+  earliest: string,
+  days: number[],
+  pauses: PauseRange[] = [],
+  holidays: Set<string> = new Set(),
+  count = 8,
+): string[] {
+  const out = [earliest]
+  for (let i = 1; i < count; i += 1) {
+    const next = nextShipDate(out[out.length - 1], days, pauses, holidays)
+    if (!next) break
+    out.push(next)
+  }
+  return out
+}

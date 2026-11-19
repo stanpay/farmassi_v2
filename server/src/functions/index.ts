@@ -4,10 +4,14 @@ import { bankdaAccountStatus } from './bankdaAccountStatus.ts'
 import { bankdaOtt } from './bankdaOtt.ts'
 import { confirmDeposit } from './confirmDeposit.ts'
 import { createOrder } from './createOrder.ts'
+import { epostAddress } from './epostAddress.ts'
 import { farmTodayQty } from './farmTodayQty.ts'
+import { jusoBuilding } from './jusoBuilding.ts'
 import { kpostShipment } from './kpostShipment.ts'
 import { matchDeposit } from './matchDeposit.ts'
+import { matchFarmProducts } from './matchFarmProducts.ts'
 import { naverAddress } from './naverAddress.ts'
+import { parseOrderMessages } from './parseOrderMessages.ts'
 import { scrapeDeposits } from './scrapeDeposits.ts'
 import { sendPushFn } from './sendPushFn.ts'
 
@@ -18,10 +22,14 @@ export const functions: Record<string, FnHandler> = {
   'bankda-ott': bankdaOtt,
   'confirm-deposit': confirmDeposit,
   'create-order': createOrder,
+  'epost-address': epostAddress,
   'farm-today-qty': farmTodayQty,
+  'juso-building': jusoBuilding,
   'kpost-shipment': kpostShipment,
   'match-deposit': matchDeposit,
+  'match-farm-products': matchFarmProducts,
   'naver-address': naverAddress,
+  'parse-order-messages': parseOrderMessages,
   'scrape-deposits': scrapeDeposits,
   'send-push': sendPushFn,
 }

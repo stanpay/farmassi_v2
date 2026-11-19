@@ -8,7 +8,7 @@ import {
   createAddressMap,
   enrichZonecode,
   getCurrentAddress,
-  loadNaverMaps,
+  loadKakaoMaps,
   searchAddresses,
   type AddressCandidate,
 } from '../../lib/naverMap'
@@ -48,8 +48,20 @@ export function AddressPicker({
   const [error, setError] = useState('')
   const [preview, setPreview] = useState<AddressCandidate | null>(null)
   const mapElRef = useRef<HTMLDivElement>(null)
+  const mapCleanupRef = useRef<(() => void) | null>(null)
   const previewRef = useRef<AddressCandidate | null>(null)
   previewRef.current = preview
+
+  function tearDownMap() {
+    const cleanup = mapCleanupRef.current
+    mapCleanupRef.current = null
+    if (!cleanup) return
+    try {
+      cleanup()
+    } catch {
+      /* map SDK can throw while detaching from a closing portal */
+    }
+  }
 
   useEffect(() => {
     if (!open) return
@@ -92,13 +104,13 @@ export function AddressPicker({
     if (!initial) return
 
     let disposed = false
-    let cleanup: (() => void) | undefined
 
     void (async () => {
       try {
-        await loadNaverMaps()
+        await loadKakaoMaps()
         if (disposed || !mapElRef.current) return
-        cleanup = createAddressMap(mapElRef.current, initial, (next) => {
+        tearDownMap()
+        mapCleanupRef.current = createAddressMap(mapElRef.current, initial, (next) => {
           setPreview((prev) => ({ ...next, id: prev?.id ?? next.id }))
         })
       } catch (err) {
@@ -110,9 +122,14 @@ export function AddressPicker({
 
     return () => {
       disposed = true
-      cleanup?.()
+      tearDownMap()
     }
   }, [open, view])
+
+  function closeOverlay() {
+    tearDownMap()
+    setOpen(false)
+  }
 
   function openSearch() {
     setError('')
@@ -152,11 +169,15 @@ export function AddressPicker({
 
   function confirmAddress() {
     if (!preview) return
-    onChange({
+    const next = {
       zonecode: preview.zonecode,
       address: preview.address,
       addressDetail: value.addressDetail,
-    })
+    }
+    // Detach map SDK before React unmounts the portal — otherwise the map
+    // throws during commit and wipes #root.
+    tearDownMap()
+    onChange(next)
     setOpen(false)
   }
 
@@ -213,7 +234,7 @@ export function AddressPicker({
               type="button"
               className="flex h-9 w-9 items-center justify-center rounded-xl hover:bg-gray-100"
               aria-label="닫기"
-              onClick={() => setOpen(false)}
+              onClick={closeOverlay}
             >
               <X className="h-5 w-5" />
             </button>
@@ -293,7 +314,7 @@ export function AddressPicker({
           ) : (
             preview && (
               <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-                <div ref={mapElRef} className="naver-map h-56 w-full shrink-0 bg-gray-100" />
+                <div ref={mapElRef} className="kakao-map h-56 w-full shrink-0 bg-gray-100" />
                 <div className="space-y-3 px-4 py-4">
                   <p className="text-xs text-muted">지도를 탭하면 위치를 미세 조정할 수 있습니다</p>
                   <div className="rounded-xl bg-primary-light px-4 py-3">
@@ -314,6 +335,7 @@ export function AddressPicker({
                     variant="ghost"
                     fullWidth
                     onClick={() => {
+                      tearDownMap()
                       setView('search')
                       setPreview(null)
                     }}

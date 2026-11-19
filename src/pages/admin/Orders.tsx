@@ -66,7 +66,25 @@ export function AdminOrders() {
                 key={order.id}
                 order={toOrderListModel(order)}
                 extra={
-                  <div className="mt-3">
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {/*
+                      출고일을 관리자가 고칠 수 있어야 한다. 손님이 미뤄 둔
+                      날짜를 앞당기거나, 농가 사정으로 미루는 일이 생긴다.
+                      비우면 가장 이른 출고일로 되돌아간다.
+                    */}
+                    <label className="flex items-center gap-1.5 text-xs text-muted">
+                      출고일
+                      <input
+                        type="date"
+                        className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs"
+                        value={order.requested_ship_date ?? ''}
+                        onChange={async (e) => {
+                          const next = e.target.value || null
+                          await supabase.from('orders').update({ requested_ship_date: next }).eq('id', order.id)
+                          await load()
+                        }}
+                      />
+                    </label>
                     <select
                       className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs"
                       value={order.status}

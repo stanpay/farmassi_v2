@@ -13,6 +13,7 @@ import { Button } from '../ui/Button'
 import { ErrorText } from '../ui/Feedback'
 import { FarmFilterChips } from './FarmFilterChips'
 import { PriceTag } from './PriceTag'
+import { normalizeTiers } from '../../lib/shippingFee'
 
 type ImportProductRow = Product & {
   farms: { name: string } | null
@@ -52,6 +53,8 @@ function copyPayload(source: ImportProductRow) {
     parcel_delivery_type: source.parcel_delivery_type,
     daily_qty_limit: source.daily_qty_limit ?? 100,
     per_order_qty_limit: source.per_order_qty_limit ?? 100,
+    // 구간표를 빠뜨리면 복사본이 배송비 0원으로 팔린다. 값 채로 베낀다.
+    shipping_fees: normalizeTiers(source.shipping_fees),
     sale_status: 'hidden' as ProductSaleStatus,
   }
 }

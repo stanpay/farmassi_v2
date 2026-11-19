@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ChevronDown, LocateFixed, MapPin, Search } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import { ShippingScheduleNotice } from '../../components/shared/ShippingScheduleNotice'
 import { Header } from '../../components/layout/Header'
+import { SiteFooter } from '../../components/layout/SiteFooter'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { AddressPicker } from '../../components/shared/AddressPicker'
@@ -11,7 +12,9 @@ import { PhoneField } from '../../components/ui/PhoneField'
 import { RequestMemoField } from '../../components/ui/RequestMemoField'
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog'
 import { ErrorText, PageSpinner } from '../../components/ui/Feedback'
+import { shippingFeeFor } from '../../lib/shippingFee'
 import { clearCart, getCart } from '../../lib/cart'
+import { isDevAuthBypass } from '../../lib/devAuthBypass'
 import { formatPrice } from '../../lib/format'
 import { invokeFunction } from '../../lib/functions'
 import {
@@ -42,6 +45,8 @@ export function Checkout() {
   const [loading, setLoading] = useState(true)
   const [todayQty, setTodayQty] = useState<TodayQty>(emptyTodayQty())
   const [volumeDialogOpen, setVolumeDialogOpen] = useState(false)
+  /** 손님이 고른 출고일. null 이면 가장 빠른 날. */
+  const [chosenShipDate, setChosenShipDate] = useState<string | null>(null)
   const [form, setForm] = useState({
     recipient_name: '',
     phone: '',
@@ -55,6 +60,8 @@ export function Checkout() {
     phone: '',
     name: '',
     senderPhone: '',
+    zonecode: '',
+    address: '',
     addressDetail: '',
   })
   const [sameAsDepositorUi, setSameAsDepositorUi] = useState(false)
@@ -111,7 +118,8 @@ export function Checkout() {
         setProducts((productRows as Product[]) ?? [])
         setTodayQty(qty)
       }
-      if (user) {
+      // 로그인 우회 세션(가짜 user id)으로는 저장된 주소를 조회하지 않는다.
+      if (user && !isDevAuthBypass()) {
         const { data: addrRows } = await supabase
           .from('saved_addresses')
           .select('*')
@@ -168,7 +176,12 @@ export function Checkout() {
       product,
       quantity: qtyById[product.id] ?? 0,
     }))
-  const total = lines.reduce((sum, line) => sum + line.product.price * line.quantity, 0)
+  const goodsTotal = lines.reduce((sum, line) => sum + line.product.price * line.quantity, 0)
+  // 배송비는 수량에 비례하지 않는다. 서버가 다시 계산하지만 손님이 주문 전에
+  // 얼마인지 알아야 하므로 화면에서도 같은 규칙으로 센다.
+  const shippingTotal = lines.reduce(
+    (sum, line) => sum + shippingFeeFor(line.product.shipping_fees, line.quantity), 0)
+  const total = goodsTotal + shippingTotal
   const volumeWarning = Boolean(
     farm &&
       isQtyVolumeExceeded({
@@ -186,6 +199,10 @@ export function Checkout() {
       return
     }
     if (!farm) return
+    if (isDevAuthBypass()) {
+      setError('로컬 데모 모드에서는 주문을 전송하지 않습니다.')
+      return
+    }
     setPending(true)
     try {
       const result = await invokeFunction<CheckoutResult>('create-order', {
@@ -194,7 +211,9 @@ export function Checkout() {
           depositorName: senderUi.depositorName,
           name: senderUi.name,
           phone: senderUi.phone,
-          address: senderUi.addressDetail,
+          zonecode: senderUi.zonecode,
+          address: senderUi.address,
+          addressDetail: senderUi.addressDetail,
         },
         items: lines.map((line) => ({ productId: line.product.id, quantity: line.quantity })),
         recipient: {
@@ -205,6 +224,8 @@ export function Checkout() {
           addressDetail: form.address_detail,
         },
         requestMemo: form.request_memo,
+        // 고르지 않았으면 보내지 않는다. 서버가 가장 이른 출고일로 둔다.
+        requestedShipDate: chosenShipDate,
         saveAddress: alreadySavedAddress(addresses, form) ? false : selectedAddressId === 'new' && saveAddress,
       })
       clearCart(farmSlug)
@@ -236,10 +257,11 @@ export function Checkout() {
   }
 
   return (
-    <div className="min-h-dvh bg-surface pb-10">
-      <Header title="주문하기" showBack backTo={`/farm/${farmSlug}`} />
-      <form
-        className="px-4 py-4 md:px-6 max-w-lg mx-auto space-y-4"
+    <div className="bg-surface">
+      <div className="flex min-h-dvh flex-col pb-10">
+        <Header title="주문하기" showBack backTo={`/farm/${farmSlug}`} />
+        <form
+          className="flex-1 px-4 py-4 md:px-6 max-w-lg mx-auto w-full space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
           if (volumeWarning) {
@@ -261,7 +283,19 @@ export function Checkout() {
               </div>
             ))}
           </div>
-          <div className="mt-3 flex justify-between font-bold">
+          {shippingTotal > 0 && (
+            <div className="mt-3 space-y-1 border-t border-gray-100 pt-3 text-sm">
+              <div className="flex justify-between text-muted">
+                <span>상품 금액</span>
+                <span>{formatPrice(goodsTotal)}</span>
+              </div>
+              <div className="flex justify-between text-muted">
+                <span>배송비</span>
+                <span>{formatPrice(shippingTotal)}</span>
+              </div>
+            </div>
+          )}
+          <div className={`flex justify-between font-bold ${shippingTotal > 0 ? 'mt-2' : 'mt-3'}`}>
             <span>합계</span>
             <span className="text-primary">{formatPrice(total)}</span>
           </div>
@@ -335,31 +369,30 @@ export function Checkout() {
                 value={senderUi.senderPhone}
                 onChange={(senderPhone) => setSenderUi((p) => ({ ...p, senderPhone }))}
               />
+              {/*
+                버튼만 있고 아무 동작도 붙어 있지 않았다. 그래서 보내는 분
+                주소는 저장된 적이 없고 상세주소만 sender_address 로 들어갔다.
+                배송지와 같은 선택기를 그대로 쓴다.
+              */}
               <div className="space-y-3">
                 <p className="text-xs font-medium text-muted">주소 (선택)</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button type="button" variant="secondary">
-                    <LocateFixed className="h-4 w-4" />
-                    현재 위치
-                  </Button>
-                  <Button type="button" variant="outline">
-                    <Search className="h-4 w-4" />
-                    주소 검색
-                  </Button>
-                </div>
-                <div className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-left">
-                  <p className="flex items-center gap-2 text-sm text-muted">
-                    <MapPin className="h-4 w-4 shrink-0" />
-                    보내는 분 주소를 현재 위치 또는 검색으로 설정해 주세요
-                  </p>
-                </div>
-                <Input
-                  form=""
-                  label="상세주소 (선택)"
-                  placeholder="동·호수 등"
-                  autoComplete="off"
-                  value={senderUi.addressDetail}
-                  onChange={(e) => setSenderUi((p) => ({ ...p, addressDetail: e.target.value }))}
+                <AddressPicker
+                  value={{
+                    zonecode: senderUi.zonecode,
+                    address: senderUi.address,
+                    addressDetail: senderUi.addressDetail,
+                  }}
+                  searchTitle="보내는 분 주소 검색"
+                  emptyHint="보내는 분 주소를 현재 위치 또는 검색으로 설정해 주세요"
+                  detailLabel="상세주소 (선택)"
+                  onChange={(next) =>
+                    setSenderUi((p) => ({
+                      ...p,
+                      zonecode: next.zonecode,
+                      address: next.address,
+                      addressDetail: next.addressDetail,
+                    }))
+                  }
                 />
               </div>
             </>
@@ -461,6 +494,8 @@ export function Checkout() {
             farmId={farm.id}
             volumeWarning={volumeWarning}
             volumeWarningMessage={QTY_VOLUME_WARNING}
+            chosenShipDate={chosenShipDate}
+            onChangeShipDate={setChosenShipDate}
           />
 
         <Card className="bg-primary-light border-primary/20">
@@ -473,19 +508,21 @@ export function Checkout() {
         <Button type="submit" fullWidth size="lg" disabled={pending || !farm?.is_active}>
           {!farm?.is_active ? '지금은 주문을 받지 않습니다' : `${formatPrice(total)} 주문하기`}
         </Button>
-      </form>
-      <ConfirmDialog
-        open={volumeDialogOpen}
-        title="배송 일정 확인"
-        description={QTY_VOLUME_WARNING}
-        confirmLabel="확인하고 주문하기"
-        pending={pending}
-        onCancel={() => setVolumeDialogOpen(false)}
-        onConfirm={() => {
-          setVolumeDialogOpen(false)
-          void placeOrder()
-        }}
-      />
+        </form>
+        <ConfirmDialog
+          open={volumeDialogOpen}
+          title="배송 일정 확인"
+          description={QTY_VOLUME_WARNING}
+          confirmLabel="확인하고 주문하기"
+          pending={pending}
+          onCancel={() => setVolumeDialogOpen(false)}
+          onConfirm={() => {
+            setVolumeDialogOpen(false)
+            void placeOrder()
+          }}
+        />
+      </div>
+      <SiteFooter />
     </div>
   )
 }

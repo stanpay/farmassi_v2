@@ -38,7 +38,12 @@ export function emptyFarmCells(): Record<Channel, HistoryCell> {
 
 /** 정산 대상 농가. 비활성 농가도 지난 이력이 있으므로 전부 가져온다. */
 export async function loadFarms(): Promise<HistoryFarm[]> {
-  const { data } = await supabase.from('farms').select('id, name, delivery_days').order('name')
+  // 비활성 농가는 더 이상 송장을 대행하지 않으므로 이력 화면에서 뺀다.
+  const { data } = await supabase
+    .from('farms')
+    .select('id, name, delivery_days')
+    .eq('is_active', true)
+    .order('name')
   return (data ?? []).map((row: any) => ({
     id: row.id,
     name: row.name,
@@ -166,9 +171,11 @@ export async function saveDay(
   day: HistoryDay,
   farms: HistoryFarm[],
   farmProducts: Record<string, { id: string; name: string }[]>,
+  /** 지정하면 이 채널만 저장. 농가 화면은 카톡 비즈니스를 건드리지 않는다. */
+  channels: readonly Channel[] = CHANNELS,
 ): Promise<string | null> {
   const cellRows = farms.flatMap((farm) =>
-    CHANNELS.map((channel) => {
+    channels.map((channel) => {
       const cell = day.cells[farm.id]?.[channel] ?? emptyCell()
       return {
         entry_date: date, farm_id: farm.id, channel,
@@ -179,11 +186,16 @@ export async function saveDay(
   const productRows = farms.flatMap((farm) => {
     const qty = day.productQty[farm.id] ?? {}
     const nameOf = new Map((farmProducts[farm.id] ?? []).map((p) => [p.id, p.name]))
-    return Object.entries(qty).map(([key, quantity]) => ({
-      entry_date: date, farm_id: farm.id,
-      // 화면 키는 상품 id 지만 저장은 이름으로 한다. 상품이 지워져도 이력이 남아야 한다.
-      product_name: nameOf.get(key) ?? key,
-      quantity,
+    // 화면 키는 상품 id 지만 저장은 이름으로 한다. 상품이 지워져도 이력이 남아야 한다.
+    // 이름 키(지워진 상품)와 id 키가 같은 이름이 되면 한 upsert 에 같은 행이 두 번 들어가
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time" 이 난다. 이름별로 합친다.
+    const byName = new Map<string, number>()
+    for (const [key, quantity] of Object.entries(qty)) {
+      const name = nameOf.get(key) ?? key
+      byName.set(name, (byName.get(name) ?? 0) + quantity)
+    }
+    return [...byName].map(([product_name, quantity]) => ({
+      entry_date: date, farm_id: farm.id, product_name, quantity,
     }))
   })
 

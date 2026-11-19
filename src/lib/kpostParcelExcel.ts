@@ -110,17 +110,29 @@ export function parcelOptionsFromOrder(order: OrderRow): ParcelExcelOptions {
   }
 }
 
-function fileStamp() {
-  return new Intl.DateTimeFormat('sv-SE', {
+function fileStampParts() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Seoul',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-  })
-    .format(new Date())
-    .replace(/[-: ]/g, '')
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? ''
+  return {
+    date: `${get('year')}${get('month')}${get('day')}`,
+    time: `${get('hour')}${get('minute')}${get('second')}`,
+  }
+}
+
+/** 파일명에 쓸 수 없는 문자만 빼고 농가명은 그대로 둔다. */
+function sanitizeFarmName(name: string) {
+  const cleaned = name.trim().replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '')
+  return cleaned || '농가'
 }
 
 function applyHeaderStyle(workbook: Workbook) {
@@ -145,7 +157,7 @@ export function ordersMissingZonecode(orders: OrderRow[]) {
   return orders.filter((order) => formatZonecode(order.zonecode).length !== 5)
 }
 
-export async function downloadKpostParcelExcel(orders: OrderRow[], fileStem = 'kpost_parcel') {
+export async function downloadKpostParcelExcel(orders: OrderRow[], farmName = '농가') {
   if (orders.length === 0) throw new Error('다운로드할 주문이 없습니다.')
 
   const { Workbook } = await import('exceljs')
@@ -191,8 +203,8 @@ export async function downloadKpostParcelExcel(orders: OrderRow[], fileStem = 'k
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  const stem = (fileStem || 'kpost_parcel').replace(/[^\w.-]+/g, '_') || 'kpost_parcel'
-  link.download = `${stem}_${fileStamp()}.xlsx`
+  const { date, time } = fileStampParts()
+  link.download = `farmassi_${sanitizeFarmName(farmName)}_${date}${time}.xlsx`
   link.click()
   URL.revokeObjectURL(url)
 }

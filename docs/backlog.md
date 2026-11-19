@@ -167,9 +167,10 @@ server/db/snapshot.sh "..." farmassi_dev        # dev
 - 네이버 키는 **지도 SDK 전용**이다. 서버 지오코딩은 카카오라 무관하다.
 
 ### 지도 카카오맵 전환
-- **상태** 착수 전 (조사 완료)
-- `src/lib/naverMap.ts` 의 SDK·렌더 부분만 교체하면 되고, 지오코딩은 이미 카카오다.
-- 끝나면 네이버 의존이 완전히 사라진다. 카카오 콘솔에 Web 플랫폼 도메인 등록 필요.
+- **상태** 완료
+- `src/lib/naverMap.ts` SDK·렌더를 카카오맵으로 교체. 지오코딩은 기존 카카오 REST.
+- 프론트 환경변수: `VITE_KAKAO_JS_KEY` (JavaScript 키). 네이버 지도 키 불필요.
+- 카카오 콘솔 Web 플랫폼 도메인 등록 필요.
 
 ### 외부 콘솔 등록 (사용자 작업)
 - 카카오: 리다이렉트 URI `https://dev.api.farmassi.kr/auth/kakao/callback`
