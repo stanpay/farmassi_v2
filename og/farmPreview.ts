@@ -159,71 +159,54 @@ export async function loadFarmOg(slug: string, requestUrl: URL): Promise<FarmOgD
   }
 }
 
-export function renderFarmOgHtml(data: FarmOgData): string {
-  const title = escapeHtml(data.name)
-  const description = escapeHtml(data.description)
-  const image = escapeHtml(data.imageUrl)
-  const url = escapeHtml(data.pageUrl)
-  const appUrl = escapeHtml(data.appUrl)
-  // JS만 쓴다. meta refresh 는 일부 스크래퍼가 따라가 OG를 놓친다.
-  const appUrlJs = JSON.stringify(data.appUrl)
-
-  return `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <title>${title} | 팜어시</title>
-  <meta name="description" content="${description}" />
-  <link rel="canonical" href="${url}" />
-  <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="팜어시" />
-  <meta property="og:title" content="${title}" />
-  <meta property="og:description" content="${description}" />
-  <meta property="og:url" content="${url}" />
-  <meta property="og:image" content="${image}" />
-  <meta property="og:image:width" content="1200" />
-  <meta property="og:image:height" content="630" />
-  <meta property="og:locale" content="ko_KR" />
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="${title}" />
-  <meta name="twitter:description" content="${description}" />
-  <meta name="twitter:image" content="${image}" />
-  <script>location.replace(${appUrlJs})</script>
-</head>
-<body>
-  <p>${title}</p>
-  <p>${description}</p>
-  <p><a href="${appUrl}">페이지 열기</a></p>
-</body>
-</html>`
+function replaceMetaByProperty(html: string, property: string, content: string): string {
+  const re = new RegExp(
+    `<meta\\s+[^>]*property=["']${property}["'][^>]*>`,
+    'i',
+  )
+  const tag = `<meta property="${property}" content="${escapeHtml(content)}" />`
+  if (re.test(html)) return html.replace(re, tag)
+  return html.replace(/<\/head>/i, `    ${tag}\n  </head>`)
 }
 
-export function renderSiteOgHtml(site: string): string {
-  const title = '팜어시 | Farmassi'
-  const description = '팜어시(Farmassi) - 농가 직송 주문·배송 플랫폼'
-  const image = escapeHtml(`${site.replace(/\/+$/, '')}/og-default.jpg`)
-  const url = escapeHtml(site.replace(/\/+$/, '') + '/')
-  return `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <title>${title}</title>
-  <meta name="description" content="${description}" />
-  <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="팜어시" />
-  <meta property="og:title" content="${title}" />
-  <meta property="og:description" content="${description}" />
-  <meta property="og:url" content="${url}" />
-  <meta property="og:image" content="${image}" />
-  <meta property="og:image:width" content="1200" />
-  <meta property="og:image:height" content="630" />
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="${title}" />
-  <meta name="twitter:description" content="${description}" />
-  <meta name="twitter:image" content="${image}" />
-</head>
-<body>
-  <p><a href="${url}">팜어시</a></p>
-</body>
-</html>`
+function replaceMetaByName(html: string, name: string, content: string): string {
+  const re = new RegExp(`<meta\\s+[^>]*name=["']${name}["'][^>]*>`, 'i')
+  const tag = `<meta name="${name}" content="${escapeHtml(content)}" />`
+  if (re.test(html)) return html.replace(re, tag)
+  return html.replace(/<\/head>/i, `    ${tag}\n  </head>`)
+}
+
+/**
+ * SPA index.html 에 농가 OG 를 심는다.
+ * 문자(iMessage 등)는 UA가 들쭉날쭉해서 봇 판별만으로는 농가 사진이 안 나가고,
+ * 공통 og-default.jpg(초록 로고)만 잡히는 경우가 있다. Apple도 UA 무관하게
+ * 같은 메타를 주라고 권장한다.
+ */
+export function injectFarmOgIntoHtml(indexHtml: string, data: FarmOgData): string {
+  const title = `${data.name} | 팜어시`
+  let html = indexHtml
+  html = html.replace(/<title>[^<]*<\/title>/i, `<title>${escapeHtml(title)}</title>`)
+  html = replaceMetaByName(html, 'description', data.description)
+  html = replaceMetaByName(html, 'twitter:card', 'summary_large_image')
+  html = replaceMetaByName(html, 'twitter:title', data.name)
+  html = replaceMetaByName(html, 'twitter:description', data.description)
+  html = replaceMetaByName(html, 'twitter:image', data.imageUrl)
+  html = replaceMetaByProperty(html, 'og:type', 'website')
+  html = replaceMetaByProperty(html, 'og:site_name', '팜어시')
+  html = replaceMetaByProperty(html, 'og:title', data.name)
+  html = replaceMetaByProperty(html, 'og:description', data.description)
+  html = replaceMetaByProperty(html, 'og:url', data.pageUrl)
+  html = replaceMetaByProperty(html, 'og:image', data.imageUrl)
+  html = replaceMetaByProperty(html, 'og:image:width', '1200')
+  html = replaceMetaByProperty(html, 'og:image:height', '630')
+  html = replaceMetaByProperty(html, 'og:locale', 'ko_KR')
+  if (!/rel=["']canonical["']/i.test(html)) {
+    html = html.replace(/<\/head>/i, `    <link rel="canonical" href="${escapeHtml(data.pageUrl)}" />\n  </head>`)
+  } else {
+    html = html.replace(
+      /<link\s+[^>]*rel=["']canonical["'][^>]*>/i,
+      `<link rel="canonical" href="${escapeHtml(data.pageUrl)}" />`,
+    )
+  }
+  return html
 }
