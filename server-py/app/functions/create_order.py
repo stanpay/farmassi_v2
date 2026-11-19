@@ -15,6 +15,11 @@ def _normalize(value: str | None) -> str:
     return re.sub(r"\s+", " ", (value or "").strip())
 
 
+async def _display_name(db, user_id: str) -> str | None:
+    row = (await db.from_("profiles").select("display_name").eq("id", user_id).maybe_single()).data
+    return ((row or {}).get("display_name") or "").strip() or None
+
+
 async def create_order(ctx: FnCtx) -> FnResult:
     if not ctx.user_id:
         return fail("로그인이 필요합니다.", 401)
@@ -82,6 +87,9 @@ async def create_order(ctx: FnCtx) -> FnResult:
         "order_no": order_no,
         "farm_id": farm["id"],
         "customer_id": ctx.user_id,
+        "source": "store",
+        "created_by": ctx.user_id,
+        "created_by_name": await _display_name(db, ctx.user_id),
         "status": "pending_deposit",
         "recipient_name": recipient["name"],
         "recipient_phone": recipient["phone"],

@@ -152,7 +152,13 @@ export interface Order {
   id: string
   order_no: string
   farm_id: string
-  customer_id: string
+  /** 주문한 손님. 농가가 직접 추가한 주문(source = farm_manual)은 null */
+  customer_id: string | null
+  /** 주문 경로. store = 손님이 스토어에서, farm_manual = 농가가 직접 추가 */
+  source?: 'store' | 'farm_manual'
+  /** 주문을 만든 사람과 그때의 이름 */
+  created_by?: string | null
+  created_by_name?: string | null
   status: OrderStatus
   recipient_name: string
   recipient_phone: string
