@@ -63,6 +63,21 @@ async def create_order(ctx: FnCtx) -> FnResult:
     deposit_code = random_code(6)
     order_no = f"FA{seoul_date_compact()}-{random_code(4)}"
 
+    # 손님이 고른 출고일.
+    #
+    # 형식과 과거 여부만 본다. 요일·정지 규칙까지 서버에서 다시 계산하려면
+    # 공휴일과 정지 구간을 또 한 벌 들고 있어야 하고, 그 규칙이 화면과
+    # 어긋나면 손님이 고를 수 있던 날짜가 거부된다. 잘못 고른 날짜는
+    # 송장 화면에서 사람이 본다.
+    raw_ship = (body.get("requestedShipDate") or "").strip()
+    requested_ship = None
+    if raw_ship:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_ship):
+            return fail("출고일 형식이 올바르지 않습니다.")
+        if raw_ship < datetime.now(_KST).strftime('%Y-%m-%d'):
+            return fail("지난 날짜로는 출고할 수 없습니다.")
+        requested_ship = raw_ship
+
     order_result = await db.from_("orders").insert({
         "order_no": order_no,
         "farm_id": farm["id"],
@@ -80,10 +95,13 @@ async def create_order(ctx: FnCtx) -> FnResult:
         "sender_name": (sender.get("name") or "").strip() or None,
         "sender_phone": (sender.get("phone") or "").strip() or None,
         "sender_address": (sender.get("address") or "").strip() or None,
+        "sender_zonecode": (sender.get("zonecode") or "").strip() or None,
+        "sender_address_detail": (sender.get("addressDetail") or "").strip() or None,
         "total_amount": total,
         "shipping_fee": shipping_total,
         "deposit_due_amount": total,
         "deposit_code": deposit_code,
+        "requested_ship_date": requested_ship,
     }).select("id").single()
     if order_result.error or not order_result.data:
         return fail((order_result.error or {}).get("message") or "주문 생성에 실패했습니다.")

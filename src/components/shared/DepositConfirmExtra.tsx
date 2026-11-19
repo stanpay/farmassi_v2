@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { isDemoFarmOrderId } from '../../lib/demoFarmOrders'
 import { invokeFunction } from '../../lib/functions'
 import { Button } from '../ui/Button'
 
@@ -25,7 +26,10 @@ export function DepositConfirmExtra({
             setError('')
             setPending(true)
             try {
-              await invokeFunction('confirm-deposit', { orderId, provider: 'manual' })
+              // TODO(demo): 세션 더미 주문은 API 없이 로컬 상태만 갱신
+              if (!isDemoFarmOrderId(orderId)) {
+                await invokeFunction('confirm-deposit', { orderId, provider: 'manual' })
+              }
               onConfirmed()
             } catch (err) {
               setError(err instanceof Error ? err.message : '입금 확인에 실패했습니다.')

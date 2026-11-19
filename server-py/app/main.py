@@ -12,14 +12,14 @@ from contextlib import asynccontextmanager
 import base64
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import db
 from .config import config
 from .jwt_session import sign, verify
 from .functions import FUNCTIONS, FnCtx
-from .kakao import callback_url, start_url
+from .kakao import app_handoff_html, callback_url, is_app_callback_url, start_url
 from .query import run_query
 from .scheduler import start_scheduler
 from .storage import delete_image, resolve_file, upload_image
@@ -51,7 +51,9 @@ async def cors(request: Request, call_next):
     """
     origin = request.headers.get("origin")
     if request.method == "OPTIONS":
-        response = JSONResponse(None, status_code=204)
+        # 204 는 본문이 없어야 한다. JSONResponse(None) 은 "null" 4바이트를 실어서
+        # uvicorn 이 사전 요청마다 "Response content longer than Content-Length" 를 냈다.
+        response = Response(status_code=204)
     else:
         response = await call_next(request)
 
@@ -180,7 +182,10 @@ async def kakao_start(redirect: str | None = None):
 
 @app.get("/auth/kakao/callback")
 async def kakao_callback(code: str | None = None, state: str | None = None):
-    return RedirectResponse(await callback_url(code, state), status_code=302)
+    target = await callback_url(code, state)
+    if is_app_callback_url(target):
+        return HTMLResponse(app_handoff_html(target), headers={"Cache-Control": "no-store"})
+    return RedirectResponse(target, status_code=302)
 
 
 @app.post("/auth/dev-login")

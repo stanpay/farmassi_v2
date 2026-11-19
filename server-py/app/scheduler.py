@@ -12,7 +12,10 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 
+import asyncpg
+
 from . import db
+from .config import config
 from .functions import FUNCTIONS, FnCtx
 from .shared.bankda import list_accounts
 from .shared.holidays import sync as sync_holidays
@@ -96,7 +99,43 @@ async def _loop(minutes: float) -> None:
         await asyncio.sleep(minutes * 60)
 
 
-def start_scheduler() -> asyncio.Task | None:
+# 워커가 여럿이어도 스케줄러는 하나만 돌아야 한다. 둘이 돌면 뱅크다를 두 번 부르고
+# 같은 입금을 두 번 대사한다. DB advisory lock 을 쥔 워커만 돌린다. 잠금은 DB 별이라
+# 운영(farmassi)과 개발(farmassi_dev)은 서로 막지 않는다.
+_LOCK_KEY = 7_302_026   # 아무 값이나 괜찮다. 이 앱에서 advisory lock 은 이것 하나다
+_RETRY_SECONDS = 60      # 맡은 워커가 죽으면 이 안에 다른 워커가 이어받는다
+
+
+async def _hold_lock_and_run(minutes: float | None) -> None:
+    while True:
+        conn = None
+        try:
+            # 풀이 아닌 전용 연결. 잠금은 세션에 붙어 있어서, 이 연결이 살아 있는 동안만 유효하다.
+            conn = await asyncpg.connect(config.db_admin_url)
+            if await conn.fetchval("select pg_try_advisory_lock($1)", _LOCK_KEY):
+                log(f"스케줄러: 이 워커(pid {os.getpid()})가 맡는다")
+                tasks = [asyncio.create_task(_holiday_loop())]
+                if minutes is not None:
+                    tasks.append(asyncio.create_task(_loop(minutes)))
+                try:
+                    # 연결이 끊기면 잠금도 풀린다. 그때는 다른 워커가 맡을 수 있으니 여기서 멈춘다.
+                    while True:
+                        await asyncio.sleep(30)
+                        await conn.fetchval("select 1")
+                finally:
+                    for task in tasks:
+                        task.cancel()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001
+            log(f"스케줄러 잠금 연결 끊김, 다시 시도: {error}")
+        finally:
+            if conn is not None:
+                await conn.close()
+        await asyncio.sleep(_RETRY_SECONDS)
+
+
+def start_scheduler() -> asyncio.Task:
     raw = os.environ.get("SCRAPE_CHECK_MINUTES")
     try:
         minutes = float(raw) if raw not in (None, "") else 5.0
@@ -105,9 +144,7 @@ def start_scheduler() -> asyncio.Task | None:
     if not (minutes == minutes) or minutes <= 0:   # NaN 또는 0 이하
         log("입금 자동조회: 꺼짐")
         # 입금 조회를 꺼도 공휴일은 받는다. 예상 배송일 계산에 쓰이기 때문이다.
-        asyncio.create_task(_holiday_loop())
-        return None
+        return asyncio.create_task(_hold_lock_and_run(None))
 
     log(f"입금 자동조회: {minutes:g}분마다 갱신 여부 확인 (거래내역은 갱신됐을 때만 호출)")
-    asyncio.create_task(_holiday_loop())
-    return asyncio.create_task(_loop(minutes))
+    return asyncio.create_task(_hold_lock_and_run(minutes))

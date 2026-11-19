@@ -1,7 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { supabase } from './supabase'
+import {
+  DEV_BYPASS_PROFILE,
+  DEV_BYPASS_SESSION,
+  isDevAuthBypass,
+} from './devAuthBypass'
 import type { Farm, FarmMemberRole, Profile } from '../types/models'
 import type { Session, User } from './apiClient'
+import { kakaoRedirectTo } from './nativeAuthRedirect'
 
 interface FarmMembership {
   farm_id: string
@@ -84,6 +90,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let mounted = true
+
+    if (isDevAuthBypass()) {
+      setSession(DEV_BYPASS_SESSION)
+      setProfile(DEV_BYPASS_PROFILE)
+      setMemberships([])
+      setLoading(false)
+      return () => {
+        mounted = false
+      }
+    }
+
     supabase.auth.getSession().then(async ({ data }) => {
       if (!mounted) return
       await hydrate(data.session)
@@ -99,11 +116,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [hydrate])
 
   const signInWithKakao = useCallback(async (next?: string) => {
+    if (isDevAuthBypass()) return
     if (next) sessionStorage.setItem('farmassi-next', next)
+    const redirect = new URL(kakaoRedirectTo())
+    if (next) redirect.searchParams.set('next', next)
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'kakao',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: redirect.toString(),
         scopes: 'profile_nickname profile_image',
       },
     })
@@ -111,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signOut = useCallback(async () => {
+    if (isDevAuthBypass()) return
     await supabase.auth.signOut()
   }, [])
 

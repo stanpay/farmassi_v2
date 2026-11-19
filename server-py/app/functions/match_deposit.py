@@ -1,6 +1,6 @@
 from ..sb import sb
 from ..shared.push import notify_farm_members
-from ..shared.util import is_admin, now_iso
+from ..shared.util import is_admin, is_farm_member, now_iso
 from .types import FnCtx, FnResult, fail, ok
 
 
@@ -19,8 +19,6 @@ async def match_deposit(ctx: FnCtx) -> FnResult:
     """
     if not ctx.user_id:
         return fail("로그인이 필요합니다.", 401)
-    if not await is_admin(ctx.admin, ctx.user_id):
-        return fail("관리자만 처리할 수 있습니다.", 403)
 
     db = sb(ctx.admin)
     action = str(ctx.body.get("action") or "match")
@@ -33,12 +31,25 @@ async def match_deposit(ctx: FnCtx) -> FnResult:
     if not deposit:
         return fail("입금 내역을 찾을 수 없습니다.", 404)
 
+    admin_user = await is_admin(ctx.admin, ctx.user_id)
+
+    async def can_manage_farm(farm_id: str | None) -> bool:
+        if admin_user:
+            return True
+        if not farm_id:
+            return False
+        return await is_farm_member(ctx.admin, ctx.user_id, farm_id)
+
     if action == "ignore":
+        if not await can_manage_farm(deposit.get("farm_id")):
+            return fail("이 입금을 처리할 권한이 없습니다.", 403)
         await db.from_("deposit_transactions").update(
             {"match_status": "ignored", "matched_order_id": None}).eq("id", deposit_id)
         return ok({"action": action, "depositId": deposit_id})
 
     if action == "unmatch":
+        if not await can_manage_farm(deposit.get("farm_id")):
+            return fail("이 입금을 처리할 권한이 없습니다.", 403)
         if deposit["matched_order_id"]:
             # 사람이 되돌리는 것이므로 주문도 입금대기로 돌린다.
             await db.from_("orders").update({
@@ -62,6 +73,11 @@ async def match_deposit(ctx: FnCtx) -> FnResult:
         return fail("주문을 찾을 수 없습니다.", 404)
     if order["status"] != "pending_deposit":
         return fail("입금 대기 주문이 아닙니다.")
+
+    if not await can_manage_farm(order["farm_id"]):
+        return fail("이 주문의 입금을 처리할 권한이 없습니다.", 403)
+    if deposit.get("farm_id") and deposit["farm_id"] != order["farm_id"] and not admin_user:
+        return fail("다른 농가의 입금은 연결할 수 없습니다.", 403)
 
     # 이미 다른 입금이 붙어 있는 주문인지 확인한다.
     already = (await db.from_("deposit_transactions").select("id")
