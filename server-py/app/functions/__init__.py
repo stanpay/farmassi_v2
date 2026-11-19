@@ -3,6 +3,7 @@ from .approve_farm import approve_farm
 from .bankda_account_status import bankda_account_status
 from .bankda_ott import bankda_ott
 from .confirm_deposit import confirm_deposit
+from .create_farm_orders import create_farm_orders
 from .create_order import create_order
 from .farm_today_qty import farm_today_qty
 from .kpost_shipment import kpost_shipment
@@ -21,6 +22,7 @@ FUNCTIONS: dict[str, FnHandler] = {
     "bankda-account-status": bankda_account_status,
     "bankda-ott": bankda_ott,
     "confirm-deposit": confirm_deposit,
+    "create-farm-orders": create_farm_orders,
     "create-order": create_order,
     "epost-address": epost_address,
     "farm-today-qty": farm_today_qty,
