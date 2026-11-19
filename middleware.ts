@@ -39,7 +39,9 @@ export default async function middleware(request: Request) {
       status: 200,
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=86400',
+        // UA 별로 응답이 다르므로 CDN에 공용 캐시하면 인앱 브라우저에 OG HTML이 굳을 수 있다.
+        'Cache-Control': 'private, no-store',
+        Vary: 'User-Agent',
       },
     })
   } catch {

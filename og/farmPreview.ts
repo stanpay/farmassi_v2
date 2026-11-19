@@ -7,14 +7,27 @@ export type FarmOgData = {
   name: string
   description: string
   imageUrl: string
+  /** og:url / canonical (보통 랜딩 URL) */
   pageUrl: string
+  /** 사람이 OG HTML을 열었을 때 보낼 실제 앱 URL */
+  appUrl: string
 }
 
+/**
+ * 링크 미리보기 크롤러만 잡는다.
+ *
+ * 주의: 카톡 인앱 브라우저 UA에도 `KAKAOTALK/... (INAPP)` 이 들어 있다.
+ * 여기에 `/kakaotalk/` 를 쓰면 사용자가 링크를 열 때 OG용 빈 HTML만 보게 된다.
+ * 카카오 공식 스크랩 UA: `facebookexternalhit/1.1; kakaotalk-scrap/1.0; ...`
+ */
 const BOT_UA =
-  /kakaotalk|kakaobot|slackbot|twitterbot|facebookexternalhit|facebot|linkedinbot|discordbot|whatsapp|telegrambot|applebot|googlebot|bingbot|yandex|baiduspider|embedly|quora link preview|showyoubot|outbrain|pinterest|redditbot|vkshare|w3c_validator|iframely|meta-externalagent|scrapy|curl|wget|preview/i
+  /kakaotalk-scrap|kakaostory-og-reader|slackbot|twitterbot|facebookexternalhit|facebot|linkedinbot|discordbot|whatsapp|telegrambot|applebot|googlebot|bingbot|yandex|baiduspider|embedly|quora link preview|showyoubot|outbrain|pinterest|redditbot|vkshare|w3c_validator|iframely|meta-externalagent|scrapy/i
 
 export function isLinkPreviewBot(userAgent: string | null): boolean {
   if (!userAgent) return false
+  // 카톡·기타 인앱 웹뷰는 실제 사용자 → SPA
+  if (/\(INAPP\)/i.test(userAgent)) return false
+  if (/KAKAOTALK\//i.test(userAgent) && /Mozilla\//i.test(userAgent)) return false
   return BOT_UA.test(userAgent)
 }
 
@@ -127,12 +140,15 @@ export async function loadFarmOg(slug: string, requestUrl: URL): Promise<FarmOgD
 
   // 공유 URL은 안내 문자와 같이 랜딩을 canonical 로 둔다.
   const pageUrl = `${site}/farm/${encodeURIComponent(slug)}/landingpage`
+  const path = requestUrl.pathname.replace(/\/+$/, '') || `/farm/${encodeURIComponent(slug)}/landingpage`
+  const appUrl = `${site}${path}${requestUrl.search}`
 
   return {
     name: farm.name,
     description,
     imageUrl: absoluteUrl(image ?? '/og-default.jpg', site),
     pageUrl,
+    appUrl,
   }
 }
 
@@ -141,6 +157,9 @@ export function renderFarmOgHtml(data: FarmOgData): string {
   const description = escapeHtml(data.description)
   const image = escapeHtml(data.imageUrl)
   const url = escapeHtml(data.pageUrl)
+  const appUrl = escapeHtml(data.appUrl)
+  // 크롤러는 meta를 읽고, 사람이 이 HTML을 열면 SPA로 바로 보낸다.
+  const appUrlJs = JSON.stringify(data.appUrl)
 
   return `<!doctype html>
 <html lang="ko">
@@ -162,11 +181,13 @@ export function renderFarmOgHtml(data: FarmOgData): string {
   <meta name="twitter:title" content="${title}" />
   <meta name="twitter:description" content="${description}" />
   <meta name="twitter:image" content="${image}" />
+  <meta http-equiv="refresh" content="0;url=${appUrl}" />
+  <script>location.replace(${appUrlJs})</script>
 </head>
 <body>
   <p>${title}</p>
   <p>${description}</p>
-  <p><a href="${url}">페이지 열기</a></p>
+  <p><a href="${appUrl}">페이지 열기</a></p>
 </body>
 </html>`
 }
