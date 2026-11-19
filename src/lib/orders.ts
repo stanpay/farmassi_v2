@@ -109,5 +109,6 @@ export function toOrderListModel(
     depositDueAmount: order.deposit_due_amount,
     depositCode: order.deposit_code,
     reorderCount: reorderCount && reorderCount >= 2 ? reorderCount : undefined,
+    addedBy: order.source === 'farm_manual' ? order.created_by_name?.trim() || '이름 없음' : null,
   }
 }

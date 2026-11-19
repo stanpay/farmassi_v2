@@ -23,7 +23,7 @@ import {
   appendAndDownloadDraftSourceDiffCsv,
   diffDraftSource,
 } from '../../lib/draftSourceDiff'
-import { appendDemoFarmOrders } from '../../lib/demoFarmOrders'
+import { invokeFunction } from '../../lib/functions'
 import { matchFarmProduct } from '../../lib/matchFarmProduct'
 import { matchFarmProductsRemote } from '../../lib/matchFarmProductsRemote'
 import { clearSharedOrderText, peekSharedOrderText } from '../../lib/nativeShare'
@@ -102,15 +102,26 @@ type TextRange = {
   onClick?: () => void
 }
 
-const PLACEHOLDER_MESSAGES = `오후 4:19 초록빛농장 사장님 받는분:서울 마포구 성산로11길 32-7 예림 아너스아파트 701호
-이서준010-1111-2222
-보내는분:박하은010-3333-4444
-오후 4:20 초록빛농장 사장님 메시지가 삭제되었습니다.
-오후 4:20 초록빛농장 사장님 받는분:경기도 성남시 분당구 서판교로 165
-1202동 103호
-최유진 010-5555-6666
-보내는분:박하은 010-3333-4444
-오후 4:21 초록빛농장 사장님 포도즙 하나씩 입니다.`
+const PLACEHOLDER_MESSAGES = `오후 7:41 탁이네 농원 사장님 서울시 노원구 노원로 22길 71 건영3차아파트 302동 506호 01744 김민수
+오후 7:41 탁이네 농원 사장님 이하늘
+010-2345-6789
+인천 서구 용해로20
+힐스테이트 검단포레스트APT
+104동 2504호
+오후 7:43 탁이네 농원 사장님 서울 강서구 강서로 532, 103동 801호(가양동 동신아파트)
+박서연
+010-8765-4321
+포도 5kg 1개 월요일 28일 보내주세요
+보내는사람-최지우
+010-5555-1212
+오후 7:43 탁이네 농원 사장님 서울 강서구 강서로 532, 103동 801호(가양동 동신아파트)
+박서연
+010-8765-4321
+포도 5kg 1개 월요일 28일 보내주세요
+보내는사람-최지우
+010-5555-1212
+오후 7:45 탁이네 농원 사장님 노윈구3키로2박스    인천3킨로 한박스    강서구  포도  5키로하나
+오후 7:48 탁이네 농원 사장님 노윈구010   3456  7890전화번호`
 
 const FIELD_META: Record<FieldKey, { label: string; className: string }> = {
   recipientName: { label: '수령인', className: 'bg-sky-200 text-sky-950' },
@@ -1077,6 +1088,8 @@ export function FarmOrderCreate() {
   const [fixFieldKey, setFixFieldKey] = useState<FieldKey | null>(null)
   const [converting, setConverting] = useState(false)
   const [parseError, setParseError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [products, setProducts] = useState<Product[]>([])
   const [productsLoaded, setProductsLoaded] = useState(false)
 
@@ -1409,14 +1422,18 @@ export function FarmOrderCreate() {
           )}
         </div>
 
+        {saveError ? (
+          <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800">{saveError}</p>
+        ) : null}
         <div className="flex gap-2 justify-end pb-4">
           <Button type="button" variant="outline" onClick={() => navigate(`${basePath}/orders`)}>
             취소
           </Button>
           <Button
             type="button"
-            disabled={drafts.length === 0 || errorCount > 0 || addressChecking}
-            onClick={() => {
+            disabled={drafts.length === 0 || errorCount > 0 || addressChecking || saving}
+            onClick={async () => {
+              if (saving) return
               const diffRows = drafts.flatMap((draft, index) =>
                 diffDraftSource({
                   ...draft,
@@ -1429,29 +1446,45 @@ export function FarmOrderCreate() {
               )
               appendAndDownloadDraftSourceDiffCsv(diffRows)
 
-              appendDemoFarmOrders(
-                farm.id,
-                drafts.map((draft) => ({
-                  id: draft.id,
-                  recipientName: draft.recipientName,
-                  phone: draft.phone,
-                  address: draft.address,
-                  addressDetail: draft.addressDetail,
-                  zonecode: draft.zonecode,
-                  product: draft.product,
-                  productId: draft.productId,
-                  quantity: draft.quantity,
-                  senderName: draft.senderName,
-                  senderPhone: draft.senderPhone,
-                  depositorName: resolveDepositorName(draft),
-                  memo: draft.memo,
-                  unitPrice: draft.unitPrice,
-                })),
-              )
-              navigate(`${basePath}/orders?status=pending_deposit`)
+              // 서버가 한 트랜잭션으로 넣는다. 실패하면 한 건도 안 들어가므로 카드를 그대로 두고 다시 누르면 된다.
+              setSaving(true)
+              setSaveError('')
+              try {
+                await invokeFunction<{ orders: Array<{ id: string; orderNo: string }> }>(
+                  'create-farm-orders',
+                  {
+                    farmId: farm.id,
+                    orders: drafts.map((draft) => ({
+                      recipient: {
+                        name: draft.recipientName.trim(),
+                        phone: draft.phone.trim(),
+                        zonecode: draft.zonecode.trim(),
+                        address: draft.address.trim(),
+                        addressDetail: draft.addressDetail.trim(),
+                      },
+                      sender: {
+                        name: draft.senderName.trim(),
+                        phone: draft.senderPhone.trim(),
+                        depositorName: resolveDepositorName(draft),
+                      },
+                      requestMemo: draft.memo.trim(),
+                      items: [{ productId: draft.productId, quantity: draft.quantity }],
+                    })),
+                  },
+                )
+                navigate(`${basePath}/orders?status=pending_deposit`)
+              } catch (error) {
+                setSaveError(error instanceof Error ? error.message : '주문을 저장하지 못했습니다.')
+              } finally {
+                setSaving(false)
+              }
             }}
           >
-            {drafts.length > 0 ? `${drafts.length}건 주문 추가` : '주문 추가'}
+            {saving
+              ? '저장 중…'
+              : drafts.length > 0
+                ? `${drafts.length}건 주문 추가`
+                : '주문 추가'}
           </Button>
         </div>
       </div>

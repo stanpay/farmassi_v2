@@ -51,7 +51,16 @@ export function OrderItem({ order, selected, onSelect, extra, maskSensitive = fa
                   </span>
                 )}
               </div>
-              {order.orderNo && <p className="text-xs text-muted">{order.orderNo}</p>}
+              {(order.orderNo || order.addedBy) && (
+                <p className="text-xs text-muted">
+                  {order.orderNo}
+                  {order.addedBy && (
+                    <span className="ml-1.5 rounded bg-sky-50 px-1.5 py-0.5 font-medium text-sky-700">
+                      직접 추가 · {order.addedBy}
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
             <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusColors[order.status]}`}>
               {statusLabels[order.status]}
@@ -236,6 +245,7 @@ function OrderDetails({ order, maskSensitive }: { order: OrderListModel; maskSen
         )}
         <Row label="입금코드" value={order.depositCode} />
         <Row label="주문번호" value={order.orderNo} />
+        {order.addedBy && <Row label="추가한 사람" value={order.addedBy} />}
         <Row label="주문일시" value={order.orderDate} />
       </dl>
     </details>
