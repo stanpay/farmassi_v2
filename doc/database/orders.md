@@ -23,7 +23,7 @@
 | `id` | uuid | 아니오 | `gen_random_uuid()` |  |
 | `order_no` | text | 아니오 |  |  |
 | `farm_id` | uuid | 아니오 |  |  |
-| `customer_id` | uuid | 아니오 |  |  |
+| `customer_id` | uuid | 예 |  | 주문한 손님. 농가가 직접 추가한 주문(`source = farm_manual`)은 비어 있다. |
 | `status` | text | 아니오 | `'pending_deposit'::text` |  |
 | `recipient_name` | text | 아니오 |  |  |
 | `recipient_phone` | text | 아니오 |  |  |
@@ -44,6 +44,9 @@
 | `sender_phone` | text | 예 |  | 보내는 분 연락처. |
 | `sender_address` | text | 예 |  | 보내는 분 주소 (선택). |
 | `shipping_fee` | integer | 아니오 | `0` | 주문 전체 배송비. total_amount 에 이미 포함돼 있다. |
+| `source` | text | 아니오 | `'store'::text` | 주문 경로. `store` = 손님이 스토어에서, `farm_manual` = 농가가 카톡 주문을 붙여 넣어 직접 추가. |
+| `created_by` | uuid | 예 |  | 주문을 만든 사람. 스토어 주문은 손님, 직접 추가는 추가한 농가 회원·관리자. |
+| `created_by_name` | text | 예 |  | 만든 시점의 `created_by` 표시 이름. 농가 회원은 남의 profiles 를 못 읽어서 따로 남긴다. |
 
 ## 외래키
 
@@ -52,15 +55,19 @@
 | `farm_id` | `farms.id` |
 | `customer_id` | `profiles.id` |
 | `deposit_confirmed_by` | `profiles.id` |
+| `created_by` | `profiles.id` |
 
 ## 제약
 
 - `orders_deposit_due_amount_check` — `CHECK ((deposit_due_amount >= 0))`
 - `orders_status_check` — `CHECK ((status = ANY (ARRAY['pending_deposit'::text, 'paid'::text, 'packing'::text, 'shipping'::text, 'completed'::text, 'cancelled'::text])))`
 - `orders_total_amount_check` — `CHECK ((total_amount >= 0))`
+- `orders_source_check` — `CHECK ((source = ANY (ARRAY['store'::text, 'farm_manual'::text])))`
+- `orders_source_actor_check` — 스토어 주문은 `customer_id`, 직접 추가 주문은 `created_by` 가 있어야 한다.
 
 ## 인덱스
 
+- `orders_created_by_idx`
 - `orders_customer_id_idx`
 - `orders_deposit_code_key`
 - `orders_deposit_confirmed_by_idx`

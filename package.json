@@ -15,6 +15,7 @@
     "@capacitor/android": "^8.6.0",
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.6.0",
+    "@vercel/functions": "^3.11.3",
     "exceljs": "^4.4.0",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.17.0",
