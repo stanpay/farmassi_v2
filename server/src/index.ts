@@ -30,8 +30,8 @@ const server = createServer(async (req, res) => {
       return send(res, 200, VERSION)
     }
 
-    // 업로드된 이미지 서빙
-    if (req.method === 'GET' && path.startsWith('/files/')) {
+    // 업로드된 이미지 서빙 (문자 미리보기용 HEAD 포함)
+    if ((req.method === 'GET' || req.method === 'HEAD') && path.startsWith('/files/')) {
       return serveFile(req, res, decodeURIComponent(path.slice('/files/'.length)))
     }
 
