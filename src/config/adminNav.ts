@@ -1,6 +1,7 @@
 import {
   CreditCard,
   LayoutDashboard,
+  MessageCircle,
   Package,
   Sprout,
   Truck,
@@ -15,4 +16,5 @@ export const adminNavItems: NavItem[] = [
   { to: '/admin/customers', label: '고객', icon: Users },
   { to: '/admin/deposits', label: '입금', icon: CreditCard },
   { to: '/admin/shipments', label: '송장', icon: Truck },
+  { to: '/admin/kakao', label: '카카오톡', icon: MessageCircle },
 ]
