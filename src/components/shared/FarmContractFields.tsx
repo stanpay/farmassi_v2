@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Input, Select } from '../ui/Field'
 import type { Profile } from '../../types/models'
 
@@ -85,6 +85,32 @@ export function profileLabel(profile: ProfileOption | undefined) {
   return profile.phone ? `${name} · ${profile.phone}` : name
 }
 
+const CHOSEONG = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'
+const PAGE_SIZE = 30
+
+// '박지훈' → 'ㅂㅈㅎ'. 한글 음절이 아닌 글자는 그대로 둔다.
+function toChoseong(text: string) {
+  let out = ''
+  for (const ch of text) {
+    const code = ch.charCodeAt(0) - 0xac00
+    out += code >= 0 && code < 11172 ? CHOSEONG[Math.floor(code / 588)] : ch
+  }
+  return out
+}
+
+const isChoseongOnly = (text: string) => /^[ㄱ-ㅎ]+$/.test(text)
+
+function matchesQuery(profile: ProfileOption, q: string) {
+  const name = (profile.display_name ?? '').toLowerCase().replace(/\s/g, '')
+  const compact = q.replace(/\s/g, '')
+  if (!compact) return true
+  if (name.includes(compact)) return true
+  if (isChoseongOnly(compact) && toChoseong(name).includes(compact)) return true
+  const digits = compact.replace(/-/g, '')
+  if (/^\d+$/.test(digits) && (profile.phone ?? '').replace(/[\s-]/g, '').includes(digits)) return true
+  return profile.id.toLowerCase().includes(compact)
+}
+
 export function AccountPicker({
   profiles,
   selectedId,
@@ -97,27 +123,47 @@ export function AccountPicker({
   label?: string
 }) {
   const [query, setQuery] = useState('')
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+  const listRef = useRef<HTMLUListElement>(null)
+  const sentinelRef = useRef<HTMLLIElement>(null)
   const selected = profiles.find((p) => p.id === selectedId)
   const q = query.trim().toLowerCase()
-  const matches = useMemo(() => {
-    const list = q
-      ? profiles.filter((p) => {
-          const name = (p.display_name ?? '').toLowerCase()
-          const phone = (p.phone ?? '').replace(/\s/g, '')
-          const id = p.id.toLowerCase()
-          return name.includes(q) || phone.includes(q.replace(/\s/g, '')) || id.includes(q)
-        })
-      : profiles
-    return list.slice(0, 8)
-  }, [profiles, q])
+
+  // 이름이 없는 계정은 가입만 하고 프로필을 채우지 않은 것이라 고를 수 없게 뺀다.
+  const named = useMemo(() => profiles.filter((p) => p.display_name?.trim()), [profiles])
+  const matches = useMemo(() => (q ? named.filter((p) => matchesQuery(p, q)) : named), [named, q])
+  const shown = matches.slice(0, visibleCount)
+  const hasMore = shown.length < matches.length
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE)
+    listRef.current?.scrollTo({ top: 0 })
+  }, [q])
+
+  // 목록 끝이 스크롤 영역에 들어오면 다음 묶음을 더 그린다.
+  useEffect(() => {
+    const root = listRef.current
+    const sentinel = sentinelRef.current
+    if (!root || !sentinel || !hasMore) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setVisibleCount((n) => n + PAGE_SIZE)
+      },
+      { root, rootMargin: '80px' },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, shown.length])
 
   return (
     <div className="space-y-2">
       <Input
         label={label}
+        type="search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="이름, 연락처, 또는 계정 ID"
+        placeholder="이름 검색 (예: 박지훈, ㅂㅈㅎ) · 연락처"
+        autoComplete="off"
       />
       {selected && (
         <div className="flex items-center justify-between gap-2 rounded-xl bg-primary-light px-3 py-2 text-sm">
@@ -128,24 +174,37 @@ export function AccountPicker({
         </div>
       )}
       {matches.length > 0 ? (
-        <ul className="max-h-48 overflow-y-auto rounded-xl border border-gray-200 divide-y divide-gray-100">
-          {matches.map((profile: ProfileOption) => (
-            <li key={profile.id}>
-              <button
-                type="button"
-                className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${
-                  profile.id === selectedId ? 'bg-primary-light font-medium' : ''
-                }`}
-                onClick={() => {
-                  onSelect(profile.id)
-                  setQuery('')
-                }}
-              >
-                {profileLabel(profile)}
-              </button>
-            </li>
-          ))}
-        </ul>
+        <>
+          <p className="text-xs text-muted">
+            {q ? `검색 결과 ${matches.length}명` : `전체 ${matches.length}명`}
+          </p>
+          <ul
+            ref={listRef}
+            className="max-h-64 overflow-y-auto rounded-xl border border-gray-200 divide-y divide-gray-100"
+          >
+            {shown.map((profile: ProfileOption) => (
+              <li key={profile.id}>
+                <button
+                  type="button"
+                  className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${
+                    profile.id === selectedId ? 'bg-primary-light font-medium' : ''
+                  }`}
+                  onClick={() => {
+                    onSelect(profile.id)
+                    setQuery('')
+                  }}
+                >
+                  {profileLabel(profile)}
+                </button>
+              </li>
+            ))}
+            {hasMore && (
+              <li ref={sentinelRef} className="px-3 py-2 text-center text-xs text-muted">
+                불러오는 중…
+              </li>
+            )}
+          </ul>
+        </>
       ) : (
         <p className="text-xs text-muted">{q ? '일치하는 계정이 없습니다.' : '카카오로 로그인한 계정 목록입니다.'}</p>
       )}
