@@ -13,6 +13,7 @@ from .match_farm_products import match_farm_products
 from .epost_address import epost_address
 from .juso_building import juso_building
 from .naver_address import naver_address
+from .notify_alimtalk import notify_alimtalk
 from .parse_order_messages import parse_order_messages
 from .scrape_deposits import scrape_deposits
 from .send_push import send_push_fn
@@ -33,6 +34,7 @@ FUNCTIONS: dict[str, FnHandler] = {
     "match-deposit": match_deposit,
     "match-farm-products": match_farm_products,
     "naver-address": naver_address,
+    "notify-alimtalk": notify_alimtalk,
     "parse-order-messages": parse_order_messages,
     "scrape-deposits": scrape_deposits,
     "send-push": send_push_fn,
