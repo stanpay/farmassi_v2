@@ -111,22 +111,40 @@ function matchesQuery(profile: ProfileOption, q: string) {
   return profile.id.toLowerCase().includes(compact)
 }
 
+/**
+ * 계정 고르기. 여러 명을 연결할 수 있다 (기획 8.1).
+ *
+ * - 검색해서 누르면 '추가' 다 (교체가 아니다). 이미 고른 계정은 다시 눌러도 추가하지 않는다.
+ * - 고른 계정마다 '해제'.
+ * - note 로 목록 항목 옆에 안내를 붙일 수 있다 (예: 다른 농가에 연결됨). 막지는 않는다 —
+ *   실제 거부는 DB(농가 1곳 제한)가 하고 그 사유를 화면에 보여 준다.
+ */
 export function AccountPicker({
   profiles,
-  selectedId,
-  onSelect,
+  selectedIds,
+  onAdd,
+  onRemove,
+  note,
+  badge,
   label = '담당 계정',
+  disabled = false,
 }: {
   profiles: ProfileOption[]
-  selectedId: string
-  onSelect: (id: string) => void
+  selectedIds: string[]
+  onAdd: (id: string) => void
+  onRemove: (id: string) => void
+  note?: (profile: ProfileOption) => string | null | undefined
+  badge?: (profile: ProfileOption) => string | null | undefined
   label?: string
+  disabled?: boolean
 }) {
   const [query, setQuery] = useState('')
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const listRef = useRef<HTMLUListElement>(null)
   const sentinelRef = useRef<HTMLLIElement>(null)
-  const selected = profiles.find((p) => p.id === selectedId)
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  const selected = selectedIds
+    .map((id) => profiles.find((p) => p.id === id) ?? ({ id, display_name: null, phone: null, avatar_url: null } as ProfileOption))
   const q = query.trim().toLowerCase()
 
   // 이름이 없는 계정은 가입만 하고 프로필을 채우지 않은 것이라 고를 수 없게 뺀다.
@@ -165,13 +183,30 @@ export function AccountPicker({
         placeholder="이름 검색 (예: 박지훈, ㅂㅈㅎ) · 연락처"
         autoComplete="off"
       />
-      {selected && (
-        <div className="flex items-center justify-between gap-2 rounded-xl bg-primary-light px-3 py-2 text-sm">
-          <span className="font-medium text-primary">{profileLabel(selected)}</span>
-          <button type="button" className="text-xs text-muted" onClick={() => onSelect('')}>
-            해제
-          </button>
-        </div>
+      {selected.length > 0 && (
+        <ul className="space-y-1.5" aria-label="연결된 계정">
+          {selected.map((profile) => (
+            <li
+              key={profile.id}
+              className="flex items-center justify-between gap-2 rounded-xl bg-primary-light px-3 py-2 text-sm"
+            >
+              <span className="font-medium text-primary">
+                {profileLabel(profile)}
+                {badge?.(profile) && (
+                  <span className="ml-2 rounded-full bg-white px-2 py-0.5 text-[11px] text-muted">{badge(profile)}</span>
+                )}
+              </span>
+              <button
+                type="button"
+                className="text-xs text-muted disabled:opacity-50"
+                disabled={disabled}
+                onClick={() => onRemove(profile.id)}
+              >
+                해제
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
       {matches.length > 0 ? (
         <>
@@ -186,15 +221,20 @@ export function AccountPicker({
               <li key={profile.id}>
                 <button
                   type="button"
-                  className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${
-                    profile.id === selectedId ? 'bg-primary-light font-medium' : ''
+                  disabled={disabled}
+                  className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 disabled:opacity-50 ${
+                    selectedSet.has(profile.id) ? 'bg-primary-light font-medium' : ''
                   }`}
                   onClick={() => {
-                    onSelect(profile.id)
+                    if (!selectedSet.has(profile.id)) onAdd(profile.id)
                     setQuery('')
                   }}
                 >
                   {profileLabel(profile)}
+                  {selectedSet.has(profile.id) && <span className="ml-2 text-xs text-primary">연결됨</span>}
+                  {!selectedSet.has(profile.id) && note?.(profile) && (
+                    <span className="ml-2 text-xs text-muted">{note(profile)}</span>
+                  )}
                 </button>
               </li>
             ))}

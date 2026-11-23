@@ -473,8 +473,9 @@ export function AdminFarms() {
             />
             <AccountPicker
               profiles={profiles}
-              selectedId={form.owner_user_id}
-              onSelect={(id) => setForm((prev) => ({ ...prev, owner_user_id: id }))}
+              selectedIds={form.owner_user_id ? [form.owner_user_id] : []}
+              onAdd={(id) => setForm((prev) => ({ ...prev, owner_user_id: id }))}
+              onRemove={() => setForm((prev) => ({ ...prev, owner_user_id: '' }))}
             />
             <div className="flex gap-2">
               <Button size="sm" disabled={pending} onClick={() => void createFarm()}>
@@ -703,8 +704,9 @@ export function AdminFarms() {
                 <p className="font-bold">{farm.name}</p>
                 <AccountPicker
                   profiles={profiles}
-                  selectedId={bindUserId}
-                  onSelect={setBindUserId}
+                  selectedIds={bindUserId ? [bindUserId] : []}
+                  onAdd={setBindUserId}
+                  onRemove={() => setBindUserId('')}
                   label="연결할 계정"
                 />
                 <div className="flex gap-2">
