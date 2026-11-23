@@ -35,6 +35,18 @@ async def notify_farm_members(
                     url=url or f"/admin/farms/{farm_id}/orders")
 
 
+async def notify_admins(
+    conn: asyncpg.Connection, *, title: str, body: str, url: str | None = None
+) -> None:
+    """관리자 기기에 웹푸시. 구독한 관리자가 없으면 아무것도 하지 않는다."""
+    subs = await conn.fetch(
+        """select s.endpoint, s.p256dh, s.auth
+             from public.push_subscriptions s
+             join public.profiles p on p.id = s.user_id
+            where p.role = 'admin'""")
+    await send_push([dict(r) for r in subs], title=title, body=body, url=url)
+
+
 async def send_push(
     subscriptions: Iterable[dict[str, Any]], *, title: str, body: str, url: str | None = None
 ) -> None:
