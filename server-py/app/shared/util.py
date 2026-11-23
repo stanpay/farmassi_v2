@@ -14,9 +14,16 @@ def random_code(length: int) -> str:
     return "".join(secrets.choice(chars) for _ in range(length))
 
 
+#: 플랫폼 관리자(슈퍼어드민)로 보는 역할. DB 의 private.is_admin() 과 같아야 한다.
+#: 전환 기간(doc/admin-roles/sql/02~05)에는 옛 'admin' 도 받는다.
+#: 일반 어드민은 역할이 아니라 farm_members(농가 연결)로 판단한다 — is_farm_member.
+ADMIN_ROLES = ("admin", "super_admin")
+
+
 async def is_admin(conn: asyncpg.Connection, user_id: str) -> bool:
+    """슈퍼어드민인가 (플랫폼 전체 + 모든 농가)."""
     result = await sb(conn).from_("profiles").select("role").eq("id", user_id).maybe_single()
-    return bool(result.data) and result.data.get("role") == "admin"
+    return bool(result.data) and result.data.get("role") in ADMIN_ROLES
 
 
 async def is_farm_member(conn: asyncpg.Connection, user_id: str, farm_id: str) -> bool:
