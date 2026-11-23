@@ -32,8 +32,9 @@ import { adminNavItems } from '../../config/adminNav'
 import { kakaoChannelHref, safeHttpUrl } from '../../lib/format'
 import { farmLandingPath, resolveFarmShareText } from '../../lib/farmShareText'
 import { toSlug } from '../../lib/slug'
+import { isSuperAdminRole } from '../../lib/roles'
 import { supabase } from '../../lib/supabase'
-import { parseLandingBlocks, type Farm } from '../../types/models'
+import { parseLandingBlocks, type Farm, type FarmMemberRole, type ProfileRole } from '../../types/models'
 
 
 interface FarmForm {
@@ -117,13 +118,24 @@ function uniqueSlug(name: string, taken: Set<string>, current?: string) {
 
 
 
+/** 농가 연결(farm_members) 한 줄. 권한의 근거다 — owner_user_id 는 대표 표시용. */
+interface FarmMemberRow {
+  farm_id: string
+  user_id: string
+  member_role: FarmMemberRole
+  created_at: string
+}
+
+type AdminProfileOption = ProfileOption & { role: ProfileRole }
+
 export function AdminFarms() {
   const navigate = useNavigate()
   const [farms, setFarms] = useState<Farm[]>([])
-  const [profiles, setProfiles] = useState<ProfileOption[]>([])
+  const [profiles, setProfiles] = useState<AdminProfileOption[]>([])
+  const [members, setMembers] = useState<FarmMemberRow[]>([])
   const [editing, setEditing] = useState<Farm | null>(null)
   const [bindFarmId, setBindFarmId] = useState<string | null>(null)
-  const [bindUserId, setBindUserId] = useState('')
+  const [bindError, setBindError] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState<FarmForm>(emptyForm)
   const [createLanding, setCreateLanding] = useState<LandingBlockDraft[]>([createLandingBlock()])
@@ -145,9 +157,10 @@ export function AdminFarms() {
   }, [farms, visibilityFilter])
 
   async function load() {
-    const [farmRes, profileRes] = await Promise.all([
+    const [farmRes, profileRes, memberRes] = await Promise.all([
       supabase.from('farms').select('*').order('created_at', { ascending: false }),
-      supabase.from('profiles').select('id, display_name, phone, avatar_url').order('display_name'),
+      supabase.from('profiles').select('id, display_name, phone, avatar_url, role').order('display_name'),
+      supabase.from('farm_members').select('farm_id, user_id, member_role, created_at').order('created_at'),
     ])
     setFarms(
       ((farmRes.data as Farm[]) ?? []).map((farm) => ({
@@ -155,7 +168,8 @@ export function AdminFarms() {
         landing_blocks: parseLandingBlocks(farm.landing_blocks),
       })),
     )
-    setProfiles((profileRes.data as ProfileOption[]) ?? [])
+    setProfiles((profileRes.data as AdminProfileOption[]) ?? [])
+    setMembers((memberRes.data as FarmMemberRow[]) ?? [])
   }
 
   useEffect(() => {
@@ -169,14 +183,60 @@ export function AdminFarms() {
     setShowCreate(false)
   }
 
-  async function bindOwner(farmId: string, userId: string) {
-    const { error: farmError } = await supabase.from('farms').update({ owner_user_id: userId }).eq('id', farmId)
-    if (farmError) throw farmError
-    const { error: memberError } = await supabase.from('farm_members').upsert(
-      { farm_id: farmId, user_id: userId, member_role: 'owner' },
-      { onConflict: 'farm_id,user_id' },
-    )
-    if (memberError) throw memberError
+  // 농가별 연결 목록과, 계정별로 연결된 농가. 연결이 곧 권한이다 (슈퍼 제외).
+  const membersByFarm = useMemo(() => {
+    const map = new Map<string, FarmMemberRow[]>()
+    for (const row of members) map.set(row.farm_id, [...(map.get(row.farm_id) ?? []), row])
+    return map
+  }, [members])
+  const farmIdsByUser = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const row of members) map.set(row.user_id, [...(map.get(row.user_id) ?? []), row.farm_id])
+    return map
+  }, [members])
+  const farmNameById = useMemo(() => new Map(farms.map((f) => [f.id, f.name])), [farms])
+
+  /** 농가에 계정을 하나 더 연결한다. 첫 연결이면 대표(owner)로 삼는다. */
+  async function addMember(farm: Farm, userId: string) {
+    setBindError('')
+    setPending(true)
+    try {
+      const current = membersByFarm.get(farm.id) ?? []
+      const first = current.length === 0
+      const { error: memberError } = await supabase
+        .from('farm_members')
+        .insert({ farm_id: farm.id, user_id: userId, member_role: first ? 'owner' : 'staff' })
+      // 일반 어드민이 이미 다른 농가에 있으면 DB 가 거부하고 사유(그 농가 이름)를 준다.
+      if (memberError) throw new Error(memberError.message)
+      if (first && farm.owner_user_id !== userId) {
+        const { error: ownerError } = await supabase.from('farms').update({ owner_user_id: userId }).eq('id', farm.id)
+        if (ownerError) throw new Error(ownerError.message)
+      }
+      await load()
+    } catch (err) {
+      setBindError(err instanceof Error ? err.message : '계정 연결에 실패했습니다.')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  /** 연결 해제. 대표였다면 DB 가 남은 사람 중 먼저 연결된 사람을 대표로 바꾼다. */
+  async function removeMember(farm: Farm, userId: string) {
+    setBindError('')
+    setPending(true)
+    try {
+      const { error: deleteError } = await supabase
+        .from('farm_members')
+        .delete()
+        .eq('farm_id', farm.id)
+        .eq('user_id', userId)
+      if (deleteError) throw new Error(deleteError.message)
+      await load()
+    } catch (err) {
+      setBindError(err instanceof Error ? err.message : '연결 해제에 실패했습니다.')
+    } finally {
+      setPending(false)
+    }
   }
 
   async function createFarm() {
@@ -704,43 +764,37 @@ export function AdminFarms() {
                 <p className="font-bold">{farm.name}</p>
                 <AccountPicker
                   profiles={profiles}
-                  selectedIds={bindUserId ? [bindUserId] : []}
-                  onAdd={setBindUserId}
-                  onRemove={() => setBindUserId('')}
-                  label="연결할 계정"
+                  selectedIds={(membersByFarm.get(farm.id) ?? []).map((row) => row.user_id)}
+                  onAdd={(id) => void addMember(farm, id)}
+                  onRemove={(id) => void removeMember(farm, id)}
+                  disabled={pending}
+                  label="연결된 계정 (검색해서 추가)"
+                  badge={(profile) => {
+                    const tags = []
+                    if (profile.id === farm.owner_user_id) tags.push('대표')
+                    if (isSuperAdminRole(profilesById.get(profile.id)?.role)) tags.push('슈퍼')
+                    return tags.join(' · ') || null
+                  }}
+                  note={(profile) => {
+                    if (isSuperAdminRole(profilesById.get(profile.id)?.role)) return null
+                    const other = (farmIdsByUser.get(profile.id) ?? []).find((id) => id !== farm.id)
+                    return other ? `${farmNameById.get(other) ?? '다른 농가'}에 연결됨` : null
+                  }}
                 />
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    disabled={pending || !bindUserId}
-                    onClick={async () => {
-                      setError('')
-                      setPending(true)
-                      try {
-                        await bindOwner(farm.id, bindUserId)
-                        setBindFarmId(null)
-                        setBindUserId('')
-                        await load()
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : '계정 연결에 실패했습니다.')
-                      } finally {
-                        setPending(false)
-                      }
-                    }}
-                  >
-                    연결
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setBindFarmId(null)
-                      setBindUserId('')
-                    }}
-                  >
-                    취소
-                  </Button>
-                </div>
+                <p className="text-xs text-muted">
+                  연결한 계정은 이 농가 관리 페이지만 씁니다. 슈퍼어드민이 아닌 계정은 농가 1곳에만 연결할 수 있습니다.
+                </p>
+                <ErrorText>{bindError}</ErrorText>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setBindFarmId(null)
+                    setBindError('')
+                  }}
+                >
+                  닫기
+                </Button>
               </div>
             ) : (
               <>
@@ -783,7 +837,7 @@ export function AdminFarms() {
                     onClick={(e) => {
                       e.stopPropagation()
                       setBindFarmId(farm.id)
-                      setBindUserId(farm.owner_user_id)
+                      setBindError('')
                       setEditing(null)
                     }}
                   >
