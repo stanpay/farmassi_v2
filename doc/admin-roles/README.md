@@ -27,9 +27,9 @@
    ```
 3. **바로** 앱 배포 (main 머지 → Vercel, 운영 API 재시작).
    03 이후 ~ 배포 전 사이에는 옛 앱이 `role = 'admin'` 을 찾으므로 관리자 화면이 잠깐 막힌다 (수 분).
-4. SQL `11` (전환 종료) → `12` ~ `15` (리뷰 반영분, 앱과 무관하게 바로 적용 가능)
+4. SQL `11` (전환 종료) → `12` ~ `16` (리뷰 반영분·계좌 보호, 앱과 무관하게 바로 적용 가능)
    ```
-   for f in doc/admin-roles/sql/{11..15}-*.sql; do psql -d farmassi -v ON_ERROR_STOP=1 -f "$f" || break; done
+   for f in doc/admin-roles/sql/{11..16}-*.sql; do psql -d farmassi -v ON_ERROR_STOP=1 -f "$f" || break; done
    ```
 5. 확인
    ```sql
@@ -62,5 +62,6 @@
 | 농가 신청 승인에서 연결 거부 시 빈 농가가 남음 | `approve_farm.py` — 농가 삭제 |
 | 연결 추가·대표 지정이 두 요청 (중간 실패·동시 추가) | SQL 15 + 화면은 연결 추가만 |
 
-**정하지 않고 남긴 것:** 일반 어드민(농가 멤버)은 지금도 자기 농가의 계좌(`bank_name`·`account_number`·`account_holder`)와
-목록 노출(`is_listed`)을 DB 로는 바꿀 수 있다 (농가 페이지에 그런 화면은 없음, 오늘 이전부터 그랬음). 막을지 결정 필요.
+**계좌·목록 노출 (11/24 결정 "막아줘"):** 일반 어드민(농가 멤버)이 자기 농가의 계좌(`bank_name`·`account_number`·`account_holder`)와
+목록 노출(`is_listed`)을 DB 로 바꿀 수 있던 것을 SQL 16 으로 막았다. 슈퍼만 바꾼다. 개발 DB 에서 일반 어드민 수정 → 원래 값 유지,
+같은 요청의 `share_text` 는 저장, 슈퍼는 수정됨을 확인.
