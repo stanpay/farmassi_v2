@@ -34,6 +34,7 @@ import { AdminOrders } from './pages/admin/Orders'
 import { AdminCustomers } from './pages/admin/Customers'
 import { AdminDepositLedger } from './pages/admin/DepositLedger'
 import { AdminDeposits } from './pages/admin/Deposits'
+import { AdminKakao } from './pages/admin/Kakao'
 import { AdminShipments } from './pages/admin/Shipments'
 import { AdminShippingHistory } from './pages/admin/ShippingHistory'
 import { AdminShippingManual } from './pages/admin/ShippingManual'
@@ -176,6 +177,14 @@ export default function App() {
           element={
             <RequireAdmin>
               <AdminDeposits />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/kakao"
+          element={
+            <RequireAdmin>
+              <AdminKakao />
             </RequireAdmin>
           }
         />
