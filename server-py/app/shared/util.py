@@ -15,9 +15,9 @@ def random_code(length: int) -> str:
 
 
 #: 플랫폼 관리자(슈퍼어드민)로 보는 역할. DB 의 private.is_admin() 과 같아야 한다.
-#: 전환 기간(doc/admin-roles/sql/02~05)에는 옛 'admin' 도 받는다.
+#: 옛 'admin' 은 전환 종료(doc/admin-roles/sql/11)로 없어졌다.
 #: 일반 어드민은 역할이 아니라 farm_members(농가 연결)로 판단한다 — is_farm_member.
-ADMIN_ROLES = ("admin", "super_admin")
+ADMIN_ROLES = ("super_admin",)
 
 
 async def is_admin(conn: asyncpg.Connection, user_id: str) -> bool:
