@@ -8,11 +8,13 @@ import { ErrorText } from '../../components/ui/Feedback'
 import { useAuth } from '../../lib/auth'
 
 export function AdminLogin() {
-  const { isAdmin, user, loading, signInWithKakao, signOut } = useAuth()
+  const { isAdmin, user, loading, currentFarm, signInWithKakao, signOut } = useAuth()
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
 
   if (!loading && isAdmin) return <Navigate to="/admin" replace />
+  // 일반 어드민(농가 연결만 있는 계정)은 자기 농가 페이지로 (기획 9.3).
+  if (!loading && user && currentFarm) return <Navigate to={`/admin/farms/${currentFarm.id}`} replace />
 
   return (
     <div className="min-h-dvh bg-surface">
@@ -21,7 +23,7 @@ export function AdminLogin() {
         <Card className="space-y-4">
           <p className="text-sm text-muted">지정된 카카오 계정만 관리자 페이지에 들어갈 수 있습니다.</p>
           {user && !isAdmin && (
-            <ErrorText>이 계정은 관리자가 아닙니다. 다른 카카오 계정으로 다시 로그인해 주세요.</ErrorText>
+            <ErrorText>이 계정은 관리자가 아니고 연결된 농가도 없습니다. 다른 카카오 계정으로 다시 로그인해 주세요.</ErrorText>
           )}
           <ErrorText>{error}</ErrorText>
           {user && !isAdmin ? (
