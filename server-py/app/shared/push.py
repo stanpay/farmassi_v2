@@ -5,6 +5,7 @@ from typing import Any, Iterable
 import asyncpg
 
 from ..sb import sb
+from .util import ADMIN_ROLES
 
 
 async def notify_farm_members(
@@ -38,12 +39,12 @@ async def notify_farm_members(
 async def notify_admins(
     conn: asyncpg.Connection, *, title: str, body: str, url: str | None = None
 ) -> None:
-    """관리자 기기에 웹푸시. 구독한 관리자가 없으면 아무것도 하지 않는다."""
+    """슈퍼어드민 기기에 웹푸시. 구독한 관리자가 없으면 아무것도 하지 않는다."""
     subs = await conn.fetch(
         """select s.endpoint, s.p256dh, s.auth
              from public.push_subscriptions s
              join public.profiles p on p.id = s.user_id
-            where p.role = 'admin'""")
+            where p.role = any($1::text[])""", list(ADMIN_ROLES))
     await send_push([dict(r) for r in subs], title=title, body=body, url=url)
 
 
