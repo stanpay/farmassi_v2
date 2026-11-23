@@ -55,7 +55,8 @@ interface FarmForm {
   bank_name: string
   account_number: string
   account_holder: string
-  owner_user_id: string
+  /** 연결할 계정들. 첫 사람이 대표(owner_user_id)가 된다. */
+  member_ids: string[]
   is_active: boolean
   delivery_days: number[]
 }
@@ -78,7 +79,7 @@ const emptyForm: FarmForm = {
   bank_name: '',
   account_number: '',
   account_holder: '',
-  owner_user_id: '',
+  member_ids: [],
   is_active: true,
   delivery_days: [],
 }
@@ -245,8 +246,8 @@ export function AdminFarms() {
       setError('농가명을 입력하세요.')
       return
     }
-    if (!form.owner_user_id) {
-      setError('담당 계정을 선택하세요.')
+    if (form.member_ids.length === 0) {
+      setError('연결할 계정을 한 명 이상 선택하세요.')
       return
     }
     if (!form.bank_name.trim() || !form.account_number.trim() || !form.account_holder.trim()) {
@@ -265,7 +266,7 @@ export function AdminFarms() {
       .insert({
         slug,
         name: form.name.trim(),
-        owner_user_id: form.owner_user_id,
+        owner_user_id: form.member_ids[0],
         location: form.location.trim() || null,
         product_summary: form.product_summary.trim() || null,
         description: form.description.trim() || null,
@@ -304,11 +305,14 @@ export function AdminFarms() {
       setError(farmError?.message ?? '농가 생성에 실패했습니다.')
       return
     }
-    const { error: memberError } = await supabase.from('farm_members').insert({
-      farm_id: farm.id,
-      user_id: form.owner_user_id,
-      member_role: 'owner',
-    })
+    // 한 번에 넣는다. 한 명이라도 거부되면(일반 어드민 농가 1곳 제한) 전부 안 들어가고 농가도 지운다.
+    const { error: memberError } = await supabase.from('farm_members').insert(
+      form.member_ids.map((userId, index) => ({
+        farm_id: farm.id,
+        user_id: userId,
+        member_role: index === 0 ? 'owner' : 'staff',
+      })),
+    )
     if (memberError) {
       await supabase.from('farms').delete().eq('id', farm.id)
       setPending(false)
@@ -533,9 +537,21 @@ export function AdminFarms() {
             />
             <AccountPicker
               profiles={profiles}
-              selectedIds={form.owner_user_id ? [form.owner_user_id] : []}
-              onAdd={(id) => setForm((prev) => ({ ...prev, owner_user_id: id }))}
-              onRemove={() => setForm((prev) => ({ ...prev, owner_user_id: '' }))}
+              label="연결할 계정 (첫 사람이 대표)"
+              selectedIds={form.member_ids}
+              onAdd={(id) => setForm((prev) => ({ ...prev, member_ids: [...prev.member_ids, id] }))}
+              onRemove={(id) => setForm((prev) => ({ ...prev, member_ids: prev.member_ids.filter((m) => m !== id) }))}
+              badge={(profile) => {
+                const tags = []
+                if (form.member_ids[0] === profile.id) tags.push('대표')
+                if (isSuperAdminRole(profilesById.get(profile.id)?.role)) tags.push('슈퍼')
+                return tags.join(' · ') || null
+              }}
+              note={(profile) => {
+                if (isSuperAdminRole(profilesById.get(profile.id)?.role)) return null
+                const other = (farmIdsByUser.get(profile.id) ?? [])[0]
+                return other ? `${farmNameById.get(other) ?? '다른 농가'}에 연결됨` : null
+              }}
             />
             <div className="flex gap-2">
               <Button size="sm" disabled={pending} onClick={() => void createFarm()}>
