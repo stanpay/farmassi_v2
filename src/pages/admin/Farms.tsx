@@ -197,22 +197,16 @@ export function AdminFarms() {
   }, [members])
   const farmNameById = useMemo(() => new Map(farms.map((f) => [f.id, f.name])), [farms])
 
-  /** 농가에 계정을 하나 더 연결한다. 첫 연결이면 대표(owner)로 삼는다. */
+  /** 농가에 계정을 하나 더 연결한다. 대표는 DB 가 정한다 (대표가 연결에 없으면 이 사람 — SQL 15). */
   async function addMember(farm: Farm, userId: string) {
     setBindError('')
     setPending(true)
     try {
-      const current = membersByFarm.get(farm.id) ?? []
-      const first = current.length === 0
       const { error: memberError } = await supabase
         .from('farm_members')
-        .insert({ farm_id: farm.id, user_id: userId, member_role: first ? 'owner' : 'staff' })
+        .insert({ farm_id: farm.id, user_id: userId, member_role: 'staff' })
       // 일반 어드민이 이미 다른 농가에 있으면 DB 가 거부하고 사유(그 농가 이름)를 준다.
       if (memberError) throw new Error(memberError.message)
-      if (first && farm.owner_user_id !== userId) {
-        const { error: ownerError } = await supabase.from('farms').update({ owner_user_id: userId }).eq('id', farm.id)
-        if (ownerError) throw new Error(ownerError.message)
-      }
       await load()
     } catch (err) {
       setBindError(err instanceof Error ? err.message : '계정 연결에 실패했습니다.')
