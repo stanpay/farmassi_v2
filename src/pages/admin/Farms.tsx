@@ -821,7 +821,19 @@ export function AdminFarms() {
                     {farm.bank_name} {farm.account_number}
                   </p>
                   <p className="text-sm text-muted mt-1">
-                    담당 {profileLabel(profilesById.get(farm.owner_user_id))}
+                    {(() => {
+                      // 권한은 연결 목록이 근거다. 대표를 앞에, 나머지는 연결 순서대로.
+                      const rows = [...(membersByFarm.get(farm.id) ?? [])].sort(
+                        (a, b) => Number(b.user_id === farm.owner_user_id) - Number(a.user_id === farm.owner_user_id),
+                      )
+                      if (rows.length === 0) return '연결된 계정 없음'
+                      return `연결 ${rows.length}명 · ${rows
+                        .map((row) => {
+                          const label = profileLabel(profilesById.get(row.user_id))
+                          return row.user_id === farm.owner_user_id ? `${label}(대표)` : label
+                        })
+                        .join(', ')}`
+                    })()}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
