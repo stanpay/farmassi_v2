@@ -8,6 +8,7 @@ import {
 import type { Farm, FarmMemberRole, Profile } from '../types/models'
 import type { Session, User } from './apiClient'
 import { kakaoRedirectTo } from './nativeAuthRedirect'
+import { isSuperAdminRole } from './roles'
 
 interface FarmMembership {
   farm_id: string
@@ -144,7 +145,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profile,
       memberships,
       currentFarm: memberships[0]?.farm ?? null,
-      isAdmin: profile?.role === 'admin',
+      // 슈퍼어드민만 참. 일반 어드민은 memberships(isFarmUser)로 본다.
+      isAdmin: isSuperAdminRole(profile?.role),
       isFarmUser: memberships.length > 0,
       refresh,
       signInWithKakao,
