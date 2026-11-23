@@ -67,6 +67,8 @@ export interface Farm {
   product_summary: string | null
   description: string | null
   kakao_channel_url: string | null
+  /** 알리고 카카오 채널 senderkey. 없으면 팜어시 채널로 알림톡을 보낸다. */
+  aligo_sender_key?: string | null
   phone: string | null
   mobile_phone: string | null
   address: string | null

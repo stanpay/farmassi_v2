@@ -50,6 +50,7 @@ interface FarmForm {
   map_url: string
   share_text: string
   kakao_channel_url: string
+  aligo_sender_key: string
   bank_name: string
   account_number: string
   account_holder: string
@@ -72,6 +73,7 @@ const emptyForm: FarmForm = {
   map_url: '',
   share_text: '',
   kakao_channel_url: '',
+  aligo_sender_key: '',
   bank_name: '',
   account_number: '',
   account_holder: '',
@@ -208,6 +210,7 @@ export function AdminFarms() {
         product_summary: form.product_summary.trim() || null,
         description: form.description.trim() || null,
         kakao_channel_url: kakaoChannelHref(form.kakao_channel_url),
+        aligo_sender_key: form.aligo_sender_key.trim() || null,
         phone: form.phone.trim() || null,
         mobile_phone: form.mobile_phone.trim() || null,
         address: form.address.trim() || null,
@@ -433,6 +436,12 @@ export function AdminFarms() {
               onChange={(e) => setForm((prev) => ({ ...prev, kakao_channel_url: e.target.value }))}
               placeholder="https://pf.kakao.com/_xxxxx"
             />
+            <Input
+              label="알림톡 senderkey (없으면 팜어시 채널)"
+              value={form.aligo_sender_key}
+              onChange={(e) => setForm((prev) => ({ ...prev, aligo_sender_key: e.target.value }))}
+              placeholder="알리고에 등록한 농가 채널의 senderkey"
+            />
             <DeliveryDaysField
               value={form.delivery_days}
               onChange={(delivery_days) => setForm((prev) => ({ ...prev, delivery_days }))}
@@ -577,6 +586,12 @@ export function AdminFarms() {
                   onChange={(e) => setEditing({ ...editing, kakao_channel_url: e.target.value })}
                   placeholder="https://pf.kakao.com/_xxxxx"
                 />
+                <Input
+                  label="알림톡 senderkey (없으면 팜어시 채널)"
+                  value={editing.aligo_sender_key ?? ''}
+                  onChange={(e) => setEditing({ ...editing, aligo_sender_key: e.target.value })}
+                  placeholder="알리고에 등록한 농가 채널의 senderkey"
+                />
                 <DeliveryDaysField
                   value={editing.delivery_days ?? []}
                   onChange={(delivery_days) => setEditing({ ...editing, delivery_days })}
@@ -634,6 +649,7 @@ export function AdminFarms() {
                             product_summary: editing.product_summary?.trim() || null,
                             description: editing.description?.trim() || null,
                             kakao_channel_url: kakaoChannelHref(editing.kakao_channel_url),
+                            aligo_sender_key: editing.aligo_sender_key?.trim() || null,
                             phone: editing.phone?.trim() || null,
                             mobile_phone: editing.mobile_phone?.trim() || null,
                             address: editing.address?.trim() || null,

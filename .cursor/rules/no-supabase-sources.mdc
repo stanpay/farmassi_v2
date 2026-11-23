@@ -1,0 +1,10 @@
+---
+description: Do not use Supabase docs/migrations as schema source of truth
+alwaysApply: true
+---
+
+# Schema source of truth
+
+- Do **not** read or rely on Supabase-related materials for schema, roles, RLS, or migrations (`supabase/`, Supabase skill/docs, `doc/database/*` that mirror Supabase dumps, etc.).
+- Prefer the **live database** (Datagrip MCP / ops read-only / direct SQL) as the source of truth for tables, roles, and constraints.
+- For app behavior, use application code (`src/`, `server/`, `server-py/`) and live DB introspection—not Supabase migration history.
