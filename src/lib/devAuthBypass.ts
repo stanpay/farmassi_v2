@@ -15,7 +15,7 @@ export const DEV_BYPASS_SESSION: Session = {
 
 export const DEV_BYPASS_PROFILE: Profile = {
   id: DEV_BYPASS_USER_ID,
-  role: 'admin',
+  role: 'super_admin',
   display_name: '로컬 관리자',
   phone: '010-0000-0000',
   avatar_url: null,
