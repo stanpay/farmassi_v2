@@ -34,6 +34,10 @@
    select count(*) from profiles where role = 'admin';      -- 0
    ```
 
+리허설 (11/23 20:5x): 운영 DB 사본(`pg_dump farmassi` → 임시 DB)에 위 순서대로 01~11 적용 — 모두 성공.
+결과 super_admin 4명(김미자·김이현·박지훈 8767·박지훈 8113), customer 21명, 농가 6곳 대표 그대로,
+주문 13건·출고기록 180건 그대로. 01~11 을 한 번 더 돌려도 오류 없이 같은 상태. 사본은 지웠다.
+
 되돌리기: 백업 복원이 가장 확실하다. SQL 은 모두 `create or replace`/`drop if exists` 라 다시 실행해도 안전하다.
 
 ## 함께 고친 것
