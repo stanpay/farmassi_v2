@@ -184,6 +184,10 @@ async def send_alimtalk(
     base = {"kind": kind, "order_id": order_id, "user_id": user_id, "farm_id": farm_id,
             "tpl_code": code}
     try:
+        # 알리고 키를 넣기 전(운영에서 아직 켜지 않음)에는 기록도 알림도 없이 넘어간다.
+        # 키 없이 실패로 기록하면 주문마다 관리자 실패 알림이 나간다.
+        if not (os.environ.get("ALIGO_API_KEY") or "").strip():
+            return {"sent": False, "skipped": "알림톡을 켜지 않았습니다 (ALIGO_API_KEY 없음)."}
         receiver = normalize_phone(phone)
         if not receiver:
             return {"sent": False, "skipped": "수신 번호가 없습니다."}
