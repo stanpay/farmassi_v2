@@ -1,4 +1,9 @@
-export type ProfileRole = 'customer' | 'admin'
+/**
+ * super_admin: 플랫폼 관리 + 모든 농가 (슈퍼어드민).
+ * admin: 옛 값. 전환 기간(doc/admin-roles/sql)에만 남고 super_admin 과 같게 본다.
+ * 일반 어드민은 역할이 아니라 농가 연결(farm_members)로 정해진다 — customer 그대로.
+ */
+export type ProfileRole = 'customer' | 'admin' | 'super_admin'
 export type FarmMemberRole = 'owner' | 'staff'
 export type OrderStatus =
   | 'pending_deposit'
