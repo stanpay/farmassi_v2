@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { AppShell } from '../../components/layout/AppShell'
 import { Header } from '../../components/layout/Header'
 import { Badge } from '../../components/ui/Badge'
@@ -297,6 +298,11 @@ export function AdminKakao() {
     <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
       <Header title="카카오톡" subtitle="알림톡 템플릿" />
       <div className="px-4 py-4 md:px-6 max-w-3xl mx-auto space-y-4">
+        <div className="flex justify-end">
+          <Link to="/admin/kakao/logs" className="text-sm text-primary underline">
+            발송 로그 보기 →
+          </Link>
+        </div>
         <div className="flex items-end gap-2">
           <div className="flex-1">
             <Input

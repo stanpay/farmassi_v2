@@ -13,6 +13,7 @@ import asyncpg
 
 from .config import config
 from .sb import sb
+from .shared.util import is_admin
 
 MAX_BYTES = 5 * 1024 * 1024
 ALLOWED = {
@@ -40,8 +41,8 @@ async def _is_farm_member(conn: asyncpg.Connection, user_id: str, farm_id: str) 
               .eq("farm_id", farm_id).eq("user_id", user_id).maybe_single()).data
     if member:
         return True
-    profile = (await client.from_("profiles").select("role").eq("id", user_id).maybe_single()).data
-    return bool(profile) and profile.get("role") == "admin"
+    # 슈퍼어드민은 연결 없이도 모든 농가에 올린다. 판단은 한 곳(util.is_admin)에서만.
+    return await is_admin(conn, user_id)
 
 
 async def upload_image(

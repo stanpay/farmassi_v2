@@ -20,9 +20,14 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   return children
 }
 
+/**
+ * 플랫폼 관리 화면(/admin, 농가 목록, 전역 주문·입금·송장·카카오톡 등). 슈퍼어드민만.
+ * 일반 어드민(연결된 농가가 있는 계정)은 자기 농가 페이지로 보낸다 (기획 9.1·9.3).
+ */
 export function RequireAdmin({ children }: { children: ReactNode }) {
-  const { loading, user, isAdmin } = useAuth()
+  const { loading, user, isAdmin, currentFarm } = useAuth()
   if (loading) return <PageSpinner />
+  if (user && !isAdmin && currentFarm) return <Navigate to={`/admin/farms/${currentFarm.id}`} replace />
   if (!user || !isAdmin) return <Navigate to="/admin/login" replace />
   return children
 }

@@ -15,6 +15,7 @@ import {
 } from '../../lib/demoFarmOrders'
 import { farmUpdatableStatuses, statusLabels } from '../../lib/orderStatus'
 import { reorderCountsByOrderId, toOrderListModel, type OrderRow } from '../../lib/orders'
+import { notifyOrderStatusAlimtalk } from '../../lib/alimtalk'
 import { supabase } from '../../lib/supabase'
 import type { OrderStatus } from '../../types/models'
 
@@ -83,6 +84,7 @@ export function FarmOrders() {
     const { error } = await supabase.from('orders').update({ status }).eq('id', id)
     if (!error) {
       setDbOrders((prev) => prev.map((order) => (order.id === id ? { ...order, status } : order)))
+      notifyOrderStatusAlimtalk(id, status)
     }
   }
 

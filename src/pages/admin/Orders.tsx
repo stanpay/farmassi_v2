@@ -7,6 +7,7 @@ import { OrderStatusFilterChips, type StatusFilterId } from '../../components/sh
 import { adminNavItems } from '../../config/adminNav'
 import { statusLabels } from '../../lib/orderStatus'
 import { farmsFromOrders, groupOrdersByFarm, toOrderListModel, type OrderRow } from '../../lib/orders'
+import { notifyOrderStatusAlimtalk } from '../../lib/alimtalk'
 import { supabase } from '../../lib/supabase'
 import type { OrderStatus } from '../../types/models'
 
@@ -89,7 +90,9 @@ export function AdminOrders() {
                       className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs"
                       value={order.status}
                       onChange={async (e) => {
-                        await supabase.from('orders').update({ status: e.target.value as OrderStatus }).eq('id', order.id)
+                        const next = e.target.value as OrderStatus
+                        const { error } = await supabase.from('orders').update({ status: next }).eq('id', order.id)
+                        if (!error) notifyOrderStatusAlimtalk(order.id, next)
                         await load()
                       }}
                     >

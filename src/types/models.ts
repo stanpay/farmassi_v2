@@ -1,4 +1,8 @@
-export type ProfileRole = 'customer' | 'admin'
+/**
+ * super_admin: 플랫폼 관리 + 모든 농가 (슈퍼어드민).
+ * 일반 어드민은 역할이 아니라 농가 연결(farm_members)로 정해진다 — customer 그대로.
+ */
+export type ProfileRole = 'customer' | 'super_admin'
 export type FarmMemberRole = 'owner' | 'staff'
 export type OrderStatus =
   | 'pending_deposit'
@@ -67,6 +71,8 @@ export interface Farm {
   product_summary: string | null
   description: string | null
   kakao_channel_url: string | null
+  /** 알리고 카카오 채널 senderkey. 없으면 팜어시 채널로 알림톡을 보낸다. */
+  aligo_sender_key?: string | null
   phone: string | null
   mobile_phone: string | null
   address: string | null

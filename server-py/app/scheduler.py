@@ -17,6 +17,7 @@ import asyncpg
 from . import db
 from .config import config
 from .functions import FUNCTIONS, FnCtx
+from .shared.alimtalk_results import check_pending as check_alimtalk_results
 from .shared.bankda import list_accounts
 from .shared.holidays import sync as sync_holidays
 
@@ -92,6 +93,21 @@ async def _holiday_loop() -> None:
         await asyncio.sleep(86400)
 
 
+async def _alimtalk_loop() -> None:
+    """알림톡 도착 결과 확인. 확인할 건이 없으면 DB 조회 한 번으로 끝난다."""
+    await asyncio.sleep(40)
+    while True:
+        try:
+            async with db.with_admin() as conn:
+                counts = await check_alimtalk_results(conn)
+            if counts.get("checked") and any(counts.get(k) for k in ("alimtalk", "sms", "failed")):
+                log(f"알림톡 결과: 알림톡 {counts['alimtalk']}건, 문자 {counts['sms']}건,"
+                    f" 실패 {counts['failed']}건 (관리자 알림 {counts.get('alerted', 0)}건)")
+        except Exception as error:  # noqa: BLE001
+            log(f"알림톡 결과 확인 실패: {error}")
+        await asyncio.sleep(60)
+
+
 async def _loop(minutes: float) -> None:
     await asyncio.sleep(20)
     while True:
@@ -114,7 +130,8 @@ async def _hold_lock_and_run(minutes: float | None) -> None:
             conn = await asyncpg.connect(config.db_admin_url)
             if await conn.fetchval("select pg_try_advisory_lock($1)", _LOCK_KEY):
                 log(f"스케줄러: 이 워커(pid {os.getpid()})가 맡는다")
-                tasks = [asyncio.create_task(_holiday_loop())]
+                tasks = [asyncio.create_task(_holiday_loop()),
+                         asyncio.create_task(_alimtalk_loop())]
                 if minutes is not None:
                     tasks.append(asyncio.create_task(_loop(minutes)))
                 try:
