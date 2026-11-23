@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "updated": "2026-11-23",
+  "defaults": {
+    "emphasis": "basic",
+    "channelAdd": true,
+    "failover": {
+      "enabled": true,
+      "type": "lms",
+      "content": "same_as_alimtalk"
+    }
+  },
+  "templates": [
+    {
+      "kind": "order_done",
+      "name": "주문완료 안내",
+      "channels": ["farmassi", "farm"],
+      "env": "ALIGO_TPL_ORDER_DONE",
+      "buttons": [],
+      "variables": ["농가명", "주문번호", "상품명", "배송지", "배송예정일", "결제금액"],
+      "content": "[#{농가명}] 주문완료 안내\n\n□ 주문번호 : #{주문번호}\n□ 상품 : #{상품명}\n□ 배송지 : #{배송지}\n□ 배송예정일 : #{배송예정일}\n□ 결제금액 : #{결제금액}원\n\n주문이 정상적으로 접수되었습니다.\n배송 준비가 시작되면 다시 안내드릴게요."
+    },
+    {
+      "kind": "tracking",
+      "name": "택배번호 안내",
+      "channels": ["farmassi", "farm"],
+      "env": "ALIGO_TPL_TRACKING",
+      "buttons": [{ "name": "배송조회", "linkType": "DS" }],
+      "variables": ["고객명", "농가명", "상품명", "택배회사명", "송장번호"],
+      "content": "#{고객명}님, #{농가명}에서 보내드린 상품이 발송되었습니다.\n\n□ 상품 : #{상품명}\n□ 택배사 : #{택배회사명}\n□ 운송장번호 : #{송장번호}"
+    },
+    {
+      "kind": "delivered",
+      "name": "배송완료 안내",
+      "channels": ["farmassi", "farm"],
+      "env": "ALIGO_TPL_DELIVERED",
+      "buttons": [],
+      "variables": ["고객명", "농가명", "상품명"],
+      "content": "#{고객명}님, #{농가명}에서 주문하신 #{상품명}이(가) 배송완료되었습니다.\n\n맛있게 드세요."
+    },
+    {
+      "kind": "signup",
+      "name": "회원가입 완료",
+      "channels": ["farmassi"],
+      "env": "ALIGO_TPL_SIGNUP",
+      "buttons": [],
+      "variables": ["고객명"],
+      "content": "안녕하세요, #{고객명}님!\n\n팜어시 회원가입을 환영합니다.\n산지직송 농가 상품을 편하게 주문해 보세요."
+    }
+  ],
+  "farmassi": {
+    "channelId": "@팜어시",
+    "senderKeyEnv": "ALIGO_SENDER_KEY",
+    "codes": {
+      "order_done": "UO_1351",
+      "tracking": "UO_1352",
+      "delivered": "UO_1353",
+      "signup": "UO_1354"
+    }
+  }
+}
