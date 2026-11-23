@@ -7,6 +7,7 @@ Node 서버(server/)를 옮기는 중이다. 두 서버가 동시에 떠 있어�
 """
 import json
 import os
+import traceback
 from contextlib import asynccontextmanager
 
 import base64
@@ -55,7 +56,14 @@ async def cors(request: Request, call_next):
         # uvicorn 이 사전 요청마다 "Response content longer than Content-Length" 를 냈다.
         response = Response(status_code=204)
     else:
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # noqa: BLE001
+            # 처리 중 예외는 아래 on_error 와 같은 400 { error } 로 낸다. 여기서 받지 않으면
+            # 예외가 이 미들웨어를 건너뛰어 CORS 헤더가 빠지고, 브라우저는 응답을 못 읽어
+            # DB 가 준 사유(예: '이미 ○○농가에 연결된 계정') 대신 '서버에 연결하지 못했습니다'를 띄운다.
+            traceback.print_exc()
+            response = JSONResponse({"error": str(exc)}, status_code=400)
 
     if origin and (origin in config.site_origins or origin.startswith("http://localhost")):
         response.headers["Access-Control-Allow-Origin"] = origin
