@@ -11,6 +11,7 @@ import {
   isProfilePhoneValid,
   normalizeProfilePhone,
 } from '../../lib/profileCompletion'
+import { notifySignupAlimtalk } from '../../lib/alimtalk'
 import { supabase } from '../../lib/supabase'
 
 interface ProfileCompletionSheetProps {
@@ -50,6 +51,7 @@ export function ProfileCompletionSheet({ open, onCompleted }: ProfileCompletionS
     const trimmedName = name.trim()
     const trimmedPhone = normalizeProfilePhone(phone)
     const profileId = profile.id
+    const hadPhone = Boolean(profile.phone?.trim())
 
     if (!isProfileNameValid(trimmedName)) {
       setError('이름을 2글자 이상 입력해 주세요.')
@@ -71,6 +73,9 @@ export function ProfileCompletionSheet({ open, onCompleted }: ProfileCompletionS
       setPending(false)
       return
     }
+
+    // 연락처가 비어 있던 사람이 처음 저장할 때만. 서버도 사용자당 1번만 보낸다.
+    if (!hadPhone) notifySignupAlimtalk()
 
     clearProfilePending()
     await refresh()
