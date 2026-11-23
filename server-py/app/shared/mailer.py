@@ -152,3 +152,34 @@ async def send_order_mail(
     except Exception as error:  # noqa: BLE001
         print("주문 메일 발송 실패", error)
         return False
+
+
+async def send_admin_mail(*, subject: str, lines: list[str]) -> bool:
+    """관리자 확인이 필요한 일 (예: 알림톡·문자 모두 실패).
+
+    받는 곳은 ALERT_MAIL_TO, 없으면 입금 알림을 받는 DEPOSIT_MAIL_TO.
+    """
+    user = os.environ.get("SMTP_USER")
+    password = os.environ.get("SMTP_PASSWORD")
+    to = os.environ.get("ALERT_MAIL_TO") or os.environ.get("DEPOSIT_MAIL_TO")
+    if not user or not password or not to:
+        return False
+
+    message = EmailMessage()
+    message["From"] = f"팜어시 알림 <{user}>"
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content("\n".join(lines))
+    try:
+        await aiosmtplib.send(
+            message,
+            hostname=os.environ.get("SMTP_HOST") or "smtp.gmail.com",
+            port=int(os.environ.get("SMTP_PORT") or 465),
+            use_tls=True,
+            username=user,
+            password=password,
+        )
+        return True
+    except Exception as error:  # noqa: BLE001
+        print("관리자 메일 발송 실패", error)
+        return False

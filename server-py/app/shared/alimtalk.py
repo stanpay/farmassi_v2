@@ -153,11 +153,15 @@ async def _log(conn: asyncpg.Connection, **row: Any) -> None:
     try:
         await conn.execute(
             """insert into public.alimtalk_logs
-                 (kind, order_id, user_id, farm_id, phone, tpl_code, sent, mid, message, response)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)""",
+                 (kind, order_id, user_id, farm_id, phone, tpl_code, sent, mid, message, response,
+                  result, fail_reason)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)""",
             row["kind"], row.get("order_id"), row.get("user_id"), row.get("farm_id"),
             row.get("phone"), row.get("tpl_code"), bool(row.get("sent")), row.get("mid"),
-            row.get("message"), json.dumps(row.get("response") or {}, ensure_ascii=False))
+            row.get("message"), json.dumps(row.get("response") or {}, ensure_ascii=False),
+            # 접수조차 안 된 건 바로 실패. 접수된 건은 결과 확인(alimtalk_results)이 채운다.
+            "pending" if row.get("sent") else "failed",
+            None if row.get("sent") else row.get("fail_reason"))
     except Exception as error:  # noqa: BLE001
         print("알림톡 기록 실패", error)
 
@@ -215,14 +219,15 @@ async def send_alimtalk(
         sent = str(result.get("code")) == "0"
         mid = (result.get("info") or {}).get("mid")
         await _log(conn, **base, phone=receiver, sent=sent, mid=str(mid) if mid else None,
-                   message=message, response=result)
+                   message=message, response=result,
+                   fail_reason=None if sent else f"발송 요청 거절: {result.get('message')}")
         if not sent:
             print("알림톡 발송 거절", kind, code, result.get("message"))
         return {"sent": sent, "mid": mid, "message": result.get("message")}
     except Exception as error:  # noqa: BLE001
         print("알림톡 발송 실패", kind, code, error)
         await _log(conn, **base, phone=normalize_phone(phone), sent=False,
-                   response={"error": str(error)})
+                   response={"error": str(error)}, fail_reason=f"발송 오류: {error}")
         return {"sent": False, "error": str(error)}
 
 
