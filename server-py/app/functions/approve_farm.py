@@ -58,6 +58,9 @@ async def approve_farm(ctx: FnCtx) -> FnResult:
     member_result = await db.from_("farm_members").insert(
         {"farm_id": farm["id"], "user_id": application["user_id"], "member_role": "owner"})
     if member_result.error:
+        # 연결이 거부되면(예: 일반 어드민은 농가 1곳 — doc/admin-roles/sql/07) 방금 만든 농가를 지운다.
+        # 남겨 두면 연결 없는 농가가 생기고, 신청은 pending 이라 다시 누를 때마다 하나씩 더 쌓인다.
+        await db.from_("farms").delete().eq("id", farm["id"])
         return fail(member_result.error["message"])
 
     await db.from_("farm_applications").update(
