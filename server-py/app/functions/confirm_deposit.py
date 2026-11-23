@@ -1,4 +1,5 @@
 from ..sb import sb
+from ..shared.alimtalk import notify_order_done
 from ..shared.push import notify_farm_members
 from ..shared.util import is_admin, is_farm_member, now_iso
 from .types import FnCtx, FnResult, fail, ok
@@ -52,4 +53,5 @@ async def confirm_deposit(ctx: FnCtx) -> FnResult:
         title="입금 확인됨, 출고 준비",
         body=f"{order['order_no']} 입금이 확인되었습니다. 포장을 시작해주세요.",
     )
+    await notify_order_done(ctx.admin, order["id"])
     return ok()

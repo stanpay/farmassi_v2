@@ -11,6 +11,7 @@ from ..sb import Sb, sb
 from ..shared.bankda import BankdaError, fetch_transactions, to_bankda_date, to_iso_at
 from ..shared.deposit_matching import match_deposit
 from ..shared.mailer import send_deposit_mail
+from ..shared.alimtalk import notify_order_done
 from ..shared.push import notify_farm_members
 from ..shared.util import is_admin, now_iso
 from .types import FnCtx, FnResult, fail, ok
@@ -117,6 +118,7 @@ async def scrape_deposits(ctx: FnCtx) -> FnResult:
                     ctx.admin, farm_id=order["farm_id"], order_id=order["id"],
                     type_="deposit_confirmed", title="입금 확인됨, 출고 준비",
                     body=f"{order['order_no']} 입금이 확인되었습니다. 포장을 시작해주세요.")
+                await notify_order_done(ctx.admin, order["id"])
 
         # 새로 들어온 입금 1건마다 메일 1통.
         # 이미 넣은 거래는 위에서 걸러졌으므로 중복 발송되지 않는다.
@@ -179,6 +181,7 @@ async def _rematch_unmatched(db: Sb, admin) -> int:
             admin, farm_id=order["farm_id"], order_id=order["id"],
             type_="deposit_confirmed", title="입금 확인됨, 출고 준비",
             body=f"{order['order_no']} 입금이 확인되었습니다. 포장을 시작해주세요.")
+        await notify_order_done(admin, order["id"])
 
         farm = (await db.from_("farms").select("name, account_number, bank_name")
                 .eq("id", deposit["farm_id"]).maybe_single()).data
