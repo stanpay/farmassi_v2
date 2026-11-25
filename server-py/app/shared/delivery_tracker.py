@@ -34,6 +34,7 @@ CARRIERS: dict[str, dict[str, str]] = {
     "kr.epost": {"name": "우체국택배", "provider": "kpost"},
     "kr.cjlogistics": {"name": "CJ대한통운", "provider": "cj"},
     "kr.hanjin": {"name": "한진택배", "provider": "hanjin"},
+    "kr.coupangls": {"name": "쿠팡", "provider": "coupang"},
 }
 
 # ---- dev 시험 모드 ------------------------------------------------------------
