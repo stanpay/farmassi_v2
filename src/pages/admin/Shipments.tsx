@@ -56,6 +56,12 @@ function TrackingLine({ shipment }: { shipment: Shipment | null }) {
       <p className="font-medium">
         {carrier} {shipment.tracking_number}
       </p>
+      {shipment.tracker_first_event_at && (
+        <p className="text-muted">
+          배송시작 {formatSeconds(shipment.tracker_first_event_at)}
+          {shipment.tracker_first_event_name ? ` (${shipment.tracker_first_event_name})` : ''}
+        </p>
+      )}
       {last && (
         <p className="text-muted">
           최근: {last}

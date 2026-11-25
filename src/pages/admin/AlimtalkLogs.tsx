@@ -89,7 +89,7 @@ export function AdminAlimtalkLogs() {
       .select(
         '*, farms(name), orders(order_no, paid_at, deposit_confirmed_at, completed_at,' +
           ' deposit_transactions(occurred_at, created_at, provider),' +
-          ' shipments(status, tracker_first_event_at, started_at, started_via, started_webhook_at,' +
+          ' shipments(status, tracker_first_event_at, tracker_first_event_name, started_at, started_via, started_webhook_at,' +
           ' delivered_at, delivered_via, delivered_webhook_at, tracker_delivered_event_at))',
       )
       .order('created_at', { ascending: false })

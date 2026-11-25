@@ -2,7 +2,7 @@
 //
 // 주문 알림톡은 그 주문의 앞 단계를 누적해서 보여 준다.
 // 주문완료: 은행 입금(뱅크다 거래 시각) → 뱅크다에서 가져옴 → 입금완료 처리 → 발송
-// 택배번호: (입금 단계) → 택배사 접수(Delivery Tracker 기록) → 웹훅 수신 → 접수 확인 → 발송
+// 택배번호: (입금 단계) → 배송시작(택배사 기록 중 가장 이른 것) → 웹훅 수신 → 접수 확인 → 발송
 //          (웹훅이 아니라 조회·등록 직후 조회로 확인했으면 그 경로를 적는다)
 // 배송완료: (입금·접수 단계) → 택배사 배달완료(Delivery Tracker) → 웹훅 수신 → 배송완료 처리 → 발송
 // 회원가입: 가입 → 연락처 저장(처음) → 발송
@@ -19,6 +19,8 @@ export interface TimelineDeposit {
 export interface TimelineShipment {
   status: string
   tracker_first_event_at: string | null
+  /** 배송시작으로 잡은 택배사 첫 기록 이름 (집하·접수·캠프도착 등) */
+  tracker_first_event_name?: string | null
   started_at: string | null
   started_via?: string | null
   started_webhook_at?: string | null
@@ -89,7 +91,11 @@ function steps(log: TimelineLog, profile?: TimelineProfile | null): Step[] {
   if (stage >= 2 && order) {
     const shipment = (order.shipments ?? []).find((s) => s.status !== 'cancelled' && s.started_at)
     if (shipment?.tracker_first_event_at) {
-      out.push({ label: '택배사 접수', note: 'Delivery Tracker 기록 시각', at: shipment.tracker_first_event_at })
+      out.push({
+        label: '배송시작',
+        note: `택배사 기록 중 가장 이른 것${shipment.tracker_first_event_name ? ` (${shipment.tracker_first_event_name})` : ''}`,
+        at: shipment.tracker_first_event_at,
+      })
     }
     if (shipment?.started_webhook_at) {
       out.push({ label: '웹훅 수신', note: 'Delivery Tracker → 서버', at: shipment.started_webhook_at })
