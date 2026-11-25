@@ -11,10 +11,18 @@ Delivery Tracker (tracker.delivery) 배송 조회.
 
 키: DELIVERY_TRACKER_CLIENT_ID / DELIVERY_TRACKER_CLIENT_SECRET. 없으면 조회하지 않는다.
 무료 요금제 자격증명은 21일마다 콘솔(console.tracker.delivery)에서 갱신해야 한다.
+
+웹훅 (https://tracker.delivery/docs/tracking-webhook-api):
+  - registerTrackWebhook(input: {carrierId, trackingNumber, callbackUrl, expirationTime}): Boolean
+  - 만료 48시간 권장, 24시간마다 다시 불러 연장. 현재 시각을 주면 지운다.
+  - 콜백: POST {callbackUrl}, body {"carrierId", "trackingNumber"} 만. 1초 안에 202 권장,
+    2XX 가 아니면 만료까지 재시도. 서명이 없어 콜백 주소에 비밀 토큰을 넣고, 내용은 다시 조회해 확인한다.
+  - 콜백 주소: DELIVERY_TRACKER_WEBHOOK_BASE + /webhooks/delivery-tracker/{DELIVERY_TRACKER_WEBHOOK_TOKEN}
 """
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -38,6 +46,15 @@ query Track($carrierId: ID!, $trackingNumber: String!) {
 """
 
 
+_REGISTER_WEBHOOK = """
+mutation Register($input: RegisterTrackWebhookInput!) {
+  registerTrackWebhook(input: $input)
+}
+"""
+
+WEBHOOK_HOURS = 48
+
+
 class TrackerError(Exception):
     """조회 실패. code 는 Delivery Tracker 오류 코드(없으면 HTTP 등)."""
 
@@ -54,6 +71,54 @@ def _credentials() -> str | None:
     cid = (os.environ.get("DELIVERY_TRACKER_CLIENT_ID") or "").strip()
     secret = (os.environ.get("DELIVERY_TRACKER_CLIENT_SECRET") or "").strip()
     return f"{cid}:{secret}" if cid and secret else None
+
+
+def webhook_url() -> str | None:
+    """우리 콜백 주소. 주소·토큰 중 하나라도 없으면 웹훅을 걸지 않는다(조회만 한다)."""
+    base = (os.environ.get("DELIVERY_TRACKER_WEBHOOK_BASE") or "").strip().rstrip("/")
+    token = (os.environ.get("DELIVERY_TRACKER_WEBHOOK_TOKEN") or "").strip()
+    return f"{base}/webhooks/delivery-tracker/{token}" if base and token else None
+
+
+def webhook_token() -> str:
+    return (os.environ.get("DELIVERY_TRACKER_WEBHOOK_TOKEN") or "").strip()
+
+
+async def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    credentials = _credentials()
+    if not credentials:
+        raise TrackerError("Delivery Tracker 키가 없습니다.", "NOT_CONFIGURED")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5)) as client:
+            response = await client.post(
+                API_URL, json={"query": query, "variables": variables},
+                headers={"Authorization": f"TRACKQL-API-KEY {credentials}",
+                         "Content-Type": "application/json"})
+    except httpx.HTTPError as error:
+        raise TrackerError(f"연결 실패: {error}", "NETWORK") from error
+    try:
+        return response.json()
+    except ValueError as error:
+        raise TrackerError(f"HTTP {response.status_code} 응답을 읽지 못했습니다.", "HTTP") from error
+
+
+async def register_webhook(carrier_id: str, tracking_number: str,
+                           hours: int = WEBHOOK_HOURS) -> datetime:
+    """웹훅을 건다(이미 있으면 만료만 늘어난다). 만료 시각을 돌려준다. hours=0 이면 지운다."""
+    url = webhook_url()
+    if not url:
+        raise TrackerError("웹훅 주소(DELIVERY_TRACKER_WEBHOOK_BASE/TOKEN)가 없습니다.", "NOT_CONFIGURED")
+    expires = datetime.now(timezone.utc) + timedelta(hours=hours)
+    body = await _graphql(_REGISTER_WEBHOOK, {"input": {
+        "carrierId": carrier_id, "trackingNumber": tracking_number, "callbackUrl": url,
+        "expirationTime": expires.isoformat().replace("+00:00", "Z")}})
+    errors = body.get("errors") or []
+    if errors:
+        code = ((errors[0].get("extensions") or {}).get("code")) or "UNKNOWN"
+        raise TrackerError(str(errors[0].get("message") or code), code)
+    if not (body.get("data") or {}).get("registerTrackWebhook"):
+        raise TrackerError("웹훅 등록이 거절됐습니다 (false).", "REJECTED")
+    return expires
 
 
 def parse_track(data: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -80,25 +145,7 @@ def parse_track(data: dict[str, Any] | None) -> dict[str, Any] | None:
 
 async def track(carrier_id: str, tracking_number: str) -> dict[str, Any] | None:
     """배송 조회. 아직 택배사 기록이 없으면 None. 그 밖의 실패는 TrackerError."""
-    credentials = _credentials()
-    if not credentials:
-        raise TrackerError("Delivery Tracker 키가 없습니다.", "NOT_CONFIGURED")
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5)) as client:
-            response = await client.post(
-                API_URL,
-                json={"query": _QUERY,
-                      "variables": {"carrierId": carrier_id, "trackingNumber": tracking_number}},
-                headers={"Authorization": f"TRACKQL-API-KEY {credentials}",
-                         "Content-Type": "application/json"},
-            )
-    except httpx.HTTPError as error:
-        raise TrackerError(f"연결 실패: {error}", "NETWORK") from error
-    try:
-        body = response.json()
-    except ValueError as error:
-        raise TrackerError(f"HTTP {response.status_code} 응답을 읽지 못했습니다.", "HTTP") from error
-
+    body = await _graphql(_QUERY, {"carrierId": carrier_id, "trackingNumber": tracking_number})
     errors = body.get("errors") or []
     if errors:
         code = ((errors[0].get("extensions") or {}).get("code")) or "UNKNOWN"

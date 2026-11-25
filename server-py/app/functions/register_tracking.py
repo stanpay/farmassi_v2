@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 
 from ..shared import delivery_tracker
-from ..shared.shipping_tracking import check_one
+from ..shared.shipping_tracking import check_one, ensure_webhook
 from ..shared.util import is_admin, is_farm_member
 from .types import FnCtx, FnResult, fail, ok
 
@@ -74,15 +74,22 @@ async def register_tracking(ctx: FnCtx) -> FnResult:
                 "update public.orders set status = 'packing' where id = $1", order_id)
 
     tracked = "not_configured"
+    webhook = "not_configured"
     if delivery_tracker.configured():
         row = await ctx.admin.fetchrow(
             """select id, carrier_id, tracking_number, requested_at, created_at
                  from public.shipments where id = $1""", shipment_id)
-        # 바로 조회는 덤이다. 실패해도 등록은 이미 저장됐고, 루프가 10분 안에 다시 본다.
+        # 웹훅을 걸고(접수되면 Delivery Tracker 가 알려 줌), 바로 한 번 조회해 본다.
+        # 둘 다 덤이다. 실패해도 등록은 이미 저장됐고, 루프가 다시 걸고 다시 본다.
         try:
-            tracked = await check_one(ctx.admin, row)
+            webhook = await ensure_webhook(ctx.admin, row)
+        except Exception as error:  # noqa: BLE001
+            print("등록 직후 웹훅 등록 실패", shipment_id, error)
+            webhook = "error"
+        try:
+            tracked = await check_one(ctx.admin, row, via="register")
         except Exception as error:  # noqa: BLE001
             print("등록 직후 배송 조회 실패", shipment_id, error)
             tracked = "error"
     return ok({"shipmentId": str(shipment_id), "orderNo": order["order_no"],
-               "trackingNumber": number, "tracked": tracked})
+               "trackingNumber": number, "tracked": tracked, "webhook": webhook})
