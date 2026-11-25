@@ -76,7 +76,13 @@ async def register_tracking(ctx: FnCtx) -> FnResult:
     tracked = "not_configured"
     if delivery_tracker.configured():
         row = await ctx.admin.fetchrow(
-            "select id, carrier_id, tracking_number from public.shipments where id = $1", shipment_id)
-        tracked = await check_one(ctx.admin, row)
+            """select id, carrier_id, tracking_number, requested_at, created_at
+                 from public.shipments where id = $1""", shipment_id)
+        # 바로 조회는 덤이다. 실패해도 등록은 이미 저장됐고, 루프가 10분 안에 다시 본다.
+        try:
+            tracked = await check_one(ctx.admin, row)
+        except Exception as error:  # noqa: BLE001
+            print("등록 직후 배송 조회 실패", shipment_id, error)
+            tracked = "error"
     return ok({"shipmentId": str(shipment_id), "orderNo": order["order_no"],
                "trackingNumber": number, "tracked": tracked})
