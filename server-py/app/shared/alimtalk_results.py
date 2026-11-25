@@ -159,7 +159,7 @@ async def alert_failures(conn: asyncpg.Connection) -> int:
         "손님에게 알림톡과 대체문자가 모두 전달되지 않았습니다.", "", body, "",
         "관리자 화면 > 카카오톡 > 발송 로그 에서 사유를 확인해주세요.",
     ])
-    await notify_admins(conn, title=title, body=lines[0][2:], url="/admin/kakao/logs")
+    await notify_admins(conn, title=title, body=lines[0][2:], url="/admin/kakao")
     await conn.execute(
         "update public.alimtalk_logs set alerted_at = now() where id = any($1::uuid[])",
         [r["id"] for r in rows])
