@@ -20,6 +20,7 @@ from .functions import FUNCTIONS, FnCtx
 from .shared.alimtalk_results import check_pending as check_alimtalk_results
 from .shared.bankda import list_accounts
 from .shared.holidays import sync as sync_holidays
+from .shared.shipping_tracking import check_pending as check_shipments
 
 _KST = timezone(timedelta(hours=9))
 
@@ -108,6 +109,21 @@ async def _alimtalk_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def _tracking_loop() -> None:
+    """직접 등록한 송장의 접수 확인 (Delivery Tracker). 키가 없으면 조회하지 않는다."""
+    await asyncio.sleep(50)
+    while True:
+        try:
+            async with db.with_admin() as conn:
+                counts = await check_shipments(conn)
+            if counts.get("started") or counts.get("error"):
+                log(f"배송 조회: {counts['checked']}건 확인, 접수 {counts['started']}건,"
+                    f" 오류 {counts['error']}건")
+        except Exception as error:  # noqa: BLE001
+            log(f"배송 조회 실패: {error}")
+        await asyncio.sleep(60)
+
+
 async def _loop(minutes: float) -> None:
     await asyncio.sleep(20)
     while True:
@@ -131,7 +147,8 @@ async def _hold_lock_and_run(minutes: float | None) -> None:
             if await conn.fetchval("select pg_try_advisory_lock($1)", _LOCK_KEY):
                 log(f"스케줄러: 이 워커(pid {os.getpid()})가 맡는다")
                 tasks = [asyncio.create_task(_holiday_loop()),
-                         asyncio.create_task(_alimtalk_loop())]
+                         asyncio.create_task(_alimtalk_loop()),
+                         asyncio.create_task(_tracking_loop())]
                 if minutes is not None:
                     tasks.append(asyncio.create_task(_loop(minutes)))
                 try:
