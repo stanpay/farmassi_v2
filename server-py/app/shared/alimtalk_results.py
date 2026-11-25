@@ -15,12 +15,14 @@
 """
 from __future__ import annotations
 
-import json
 import os
+from datetime import datetime
 from typing import Any
 
 import asyncpg
 import httpx
+
+from .delivery_estimate import KST
 
 DETAIL_URL = "https://kakaoapi.aligo.in/akv10/history/detail/"
 SMS_LIST_URL = "https://apis.aligo.in/sms_list/"
@@ -54,6 +56,22 @@ async def _sms(smid: str) -> dict[str, Any] | None:
     return items[0] if items else None
 
 
+def _kst(value: Any) -> datetime | None:
+    """알리고 시각 문자열('2026-11-25 23:18:02', KST) → datetime. 형식이 다르면 None."""
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S").replace(tzinfo=KST)
+    except (TypeError, ValueError):
+        return None
+
+
+def _times(raw: dict[str, Any]) -> list[datetime | None]:
+    """결과 원문에서 [접수, 발송, 결과, 리포트, 대체문자 발송] 시각."""
+    at = raw.get("alimtalk") or {}
+    sms = raw.get("sms") or {}
+    return [_kst(at.get("reqdate")), _kst(at.get("sentdate")), _kst(at.get("rsltdate")),
+            _kst(at.get("reportdate")), _kst(sms.get("send_date"))]
+
+
 async def check_pending(conn: asyncpg.Connection, limit: int = 50) -> dict[str, int]:
     rows = await conn.fetch(
         """select id, mid, smid, created_at,
@@ -78,11 +96,17 @@ async def check_pending(conn: asyncpg.Connection, limit: int = 50) -> dict[str, 
                   set result = $2, at_rslt = $3, at_rslt_message = $4, smid = $5,
                       sms_state = $6, fail_reason = $7,
                       checked_at = now(), check_count = check_count + 1,
-                      response = coalesce(response, '{}'::jsonb) || $8::jsonb
+                      response = coalesce(response, '{}'::jsonb) || $8::jsonb,
+                      at_req_at = coalesce($9, at_req_at), at_sent_at = coalesce($10, at_sent_at),
+                      at_result_at = coalesce($11, at_result_at),
+                      at_report_at = coalesce($12, at_report_at),
+                      sms_sent_at = coalesce($13, sms_sent_at)
                 where id = $1""",
             row["id"], outcome["result"], outcome.get("at_rslt"), outcome.get("at_rslt_message"),
             outcome.get("smid"), outcome.get("sms_state"), outcome.get("fail_reason"),
-            json.dumps({"result_check": outcome.get("raw") or {}}, ensure_ascii=False))
+            # jsonb 는 커넥션 코덱이 직렬화한다(db.py). json.dumps 하면 문자열로 두 번 감싸진다.
+            {"result_check": outcome.get("raw") or {}},
+            *_times(outcome.get("raw") or {}))
         if outcome["result"] in counts:
             counts[outcome["result"]] += 1
 
