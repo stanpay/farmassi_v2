@@ -245,6 +245,9 @@ export interface Shipment {
   tracker_error?: string | null
   /** 택배사 접수 확인 → 배송중·배송시작 알림톡 처리 시각 */
   started_at?: string | null
+  /** 배송시작: 택배사 기록 중 가장 이른 것 */
+  tracker_first_event_at?: string | null
+  tracker_first_event_name?: string | null
   /** 접수 확인 경로: webhook / poll / register */
   started_via?: string | null
   /** Delivery Tracker 웹훅 만료 시각 (걸려 있으면 미래) */
