@@ -11,7 +11,8 @@ import { adminNavItems } from '../../config/adminNav'
 import { formatDateTime } from '../../lib/format'
 import { supabase } from '../../lib/supabase'
 import { AlimtalkSendDialog } from './AlimtalkSendDialog'
-import { AlimtalkTimeline, type TimelineLog } from './AlimtalkTimeline'
+import { AlimtalkTimeline, type TimelineLog, type TimelineProfile } from './AlimtalkTimeline'
+import { DeliveryWebhookEvents } from './DeliveryWebhookEvents'
 
 // 알림톡 발송 로그 (관리자). 서버가 1분마다 알리고에 결과를 물어 채운다.
 // 알림톡 실패 사유는 알리고 rslt_message, 대체문자 결과는 sms_list 의 sms_state 그대로다.
@@ -74,13 +75,18 @@ export function AdminAlimtalkLogs() {
   const [open, setOpen] = useState<string | null>(null)
   // null: 닫힘, 'new': 새로 수동 발송, 그 밖: 재전송할 로그 id
   const [sending, setSending] = useState<string | null>(null)
+  const [profiles, setProfiles] = useState<Record<string, TimelineProfile>>({})
+  // 알림톡 발송 로그 / 배송 웹훅 수신 기록
+  const [view, setView] = useState<'logs' | 'webhooks'>('logs')
 
   async function load() {
     const { data, error: loadError } = await supabase
       .from('alimtalk_logs')
       .select(
-        '*, farms(name), orders(order_no, paid_at, deposit_confirmed_at,' +
-          ' deposit_transactions(occurred_at, created_at, provider), shipments(status, tracker_first_event_at, started_at, started_via, started_webhook_at))',
+        '*, farms(name), orders(order_no, paid_at, deposit_confirmed_at, completed_at,' +
+          ' deposit_transactions(occurred_at, created_at, provider),' +
+          ' shipments(status, tracker_first_event_at, started_at, started_via, started_webhook_at,' +
+          ' delivered_at, delivered_via, delivered_webhook_at, tracker_delivered_event_at))',
       )
       .order('created_at', { ascending: false })
       .limit(300)
@@ -95,7 +101,15 @@ export function AdminAlimtalkLogs() {
     }
     setError('')
     setFailedAt(null)
-    setRows((data as LogRow[]) ?? [])
+    const list = (data as LogRow[]) ?? []
+    setRows(list)
+    // 회원가입 알림톡의 시작 시각(가입·연락처 저장)은 회원 정보에 있다. 로그→회원 연결이 둘(받는 회원,
+    // 보낸 관리자)이라 한 번에 붙여 읽지 않고 따로 읽는다.
+    const ids = [...new Set(list.filter((r) => r.kind === 'signup' && r.user_id).map((r) => r.user_id as string))]
+    if (ids.length > 0) {
+      const { data: people } = await supabase.from('profiles').select('id, created_at, phone_first_set_at').in('id', ids)
+      setProfiles(Object.fromEntries(((people ?? []) as ({ id: string } & TimelineProfile)[]).map((p) => [p.id, p])))
+    }
   }
 
   useEffect(() => {
@@ -129,7 +143,7 @@ export function AdminAlimtalkLogs() {
 
   return (
     <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
-      <Header title="카카오톡" subtitle="알림톡 발송 로그" />
+      <Header title="카카오톡" subtitle={view === 'logs' ? '알림톡 발송 로그' : '배송 웹훅 수신 기록'} />
       <div className="px-4 py-4 md:px-6 max-w-3xl mx-auto space-y-4">
         <div className="flex items-center justify-between gap-2">
           <Button type="button" onClick={() => setSending('new')}>
@@ -139,6 +153,29 @@ export function AdminAlimtalkLogs() {
             템플릿 보기 →
           </Link>
         </div>
+        <div className="flex gap-2" role="tablist" aria-label="기록 종류">
+          {([
+            ['logs', '알림톡 발송'],
+            ['webhooks', '배송 웹훅 수신'],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={view === id}
+              onClick={() => setView(id)}
+              className={`rounded-full px-3 py-1.5 text-sm font-medium ${
+                view === id ? 'bg-primary text-white' : 'border border-gray-200 bg-white text-muted hover:bg-gray-50'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {view === 'webhooks' ? (
+          <DeliveryWebhookEvents />
+        ) : (
+        <>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={onlyFailed} onChange={(e) => setOnlyFailed(e.target.checked)} />
@@ -215,7 +252,7 @@ export function AdminAlimtalkLogs() {
                   <dl className="grid grid-cols-[6rem_1fr] gap-x-2 gap-y-1 border-t border-gray-100 pt-2 text-xs">
                     <dt className="text-muted">시간 (초)</dt>
                     <dd>
-                      <AlimtalkTimeline log={row} />
+                      <AlimtalkTimeline log={row} profile={row.user_id ? profiles[row.user_id] : null} />
                     </dd>
                     <dt className="text-muted">알림톡 결과</dt>
                     <dd>{row.at_rslt ? `${row.at_rslt} · ${row.at_rslt_message ?? ''}` : '아직 없음'}</dd>
@@ -232,6 +269,8 @@ export function AdminAlimtalkLogs() {
               </Card>
             )
           })
+        )}
+        </>
         )}
       </div>
       <AlimtalkSendDialog
