@@ -12,6 +12,7 @@ import { adminNavItems } from '../../config/adminNav'
 import { groupOrdersByFarm, toOrderListModel, unwrapFarm, type OrderRow } from '../../lib/orders'
 import { CARRIER_NAME } from '../../lib/carriers'
 import { formatDateTime } from '../../lib/format'
+import { formatSeconds } from '../../lib/timeFormat'
 import { supabase } from '../../lib/supabase'
 import { pauseCovering, pauseMessage, todayInSeoul, type PauseRange } from '../../lib/deliveryEstimate'
 import type { Shipment } from '../../types/models'
@@ -44,7 +45,8 @@ function TrackingLine({ shipment }: { shipment: Shipment | null }) {
     shipment.started_at || shipment.status !== 'registered'
       ? ''
       : shipment.tracker_webhook_expires_at && new Date(shipment.tracker_webhook_expires_at) > new Date()
-        ? `웹훅 대기 중 (만료 ${formatDateTime(shipment.tracker_webhook_expires_at)}, 자동 연장)`
+        ? `웹훅 대기 중 (만료 ${formatDateTime(shipment.tracker_webhook_expires_at)}, 자동 연장)` +
+          (shipment.tracker_webhook_last_at ? ` · 마지막 웹훅 수신 ${formatSeconds(shipment.tracker_webhook_last_at)}` : '')
         : shipment.tracker_webhook_error
           ? `웹훅 등록 실패: ${shipment.tracker_webhook_error} (조회로 대신 확인)`
           : '웹훅 없음 (10분마다 조회)'
