@@ -10,6 +10,7 @@ import hmac
 import json
 import os
 import re
+import time
 import traceback
 from contextlib import asynccontextmanager
 
@@ -20,7 +21,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import db
+from . import chatbot, db
 from .shared import delivery_tracker
 from .shared.shipping_tracking import handle_webhook as handle_delivery_webhook
 from .config import config
@@ -41,6 +42,7 @@ async def lifespan(_: FastAPI):
     yield
     if task is not None:
         task.cancel()
+    await chatbot.close()
     await db.disconnect()
 
 
@@ -181,6 +183,55 @@ async def delivery_tracker_webhook(token: str, request: Request):
     _webhook_tasks.add(task)
     task.add_done_callback(_webhook_tasks.discard)
     return Response(status_code=202)
+
+
+# 카카오 챗봇용 읽기 전용 조회 (doc/chatbot/developer-handoff.md). 프로토타입 — 테스트 채널 전용.
+_CHATBOT_PG_CODES = {"57014": "timeout", "25006": "read_only"}
+
+
+def _chatbot_log(status: str, started: float, sql: str, rows: int | None = None) -> None:
+    # 무엇을 조회했는지 남긴다. 결과 값은 남기지 않는다.
+    ms = int((time.monotonic() - started) * 1000)
+    rows_part = f" rows={rows}" if rows is not None else ""
+    print(f"[chatbot] {status}{rows_part} {ms}ms sql={sql[:2000]!r}", flush=True)
+
+
+@app.post("/chatbot/query")
+async def chatbot_query(request: Request):
+    if not chatbot.enabled():
+        return JSONResponse({"error": {"code": "disabled"}}, status_code=503)
+    if not chatbot.authorized(request.headers.get("x-chatbot-key")):
+        return JSONResponse({"error": {"code": "unauthorized"}}, status_code=401)
+
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": {"code": "bad_request", "message": "본문은 JSON 객체여야 합니다"}},
+                            status_code=400)
+    sql = str(body.get("sql") or "").strip()
+    params = body.get("params") if body.get("params") is not None else []
+    if (not sql or len(sql) > chatbot.MAX_SQL or not isinstance(params, list)
+            or any(not (p is None or isinstance(p, (str, int, float, bool))) for p in params)):
+        return JSONResponse({"error": {"code": "bad_request",
+                                       "message": "sql 은 1~10000자, params 는 문자열·숫자·불리언·null 배열"}},
+                            status_code=400)
+
+    started = time.monotonic()
+    try:
+        result = await chatbot.run(sql, params)
+    except asyncpg.PostgresError as error:
+        code = _CHATBOT_PG_CODES.get(error.sqlstate, "sql_error")
+        _chatbot_log(f"{code} {error.sqlstate}", started, sql)
+        return JSONResponse({"error": {"code": code, "pg_code": error.sqlstate, "message": str(error)}},
+                            status_code=400)
+    except (asyncpg.InterfaceError, asyncpg.exceptions.DataError, TypeError, ValueError) as error:
+        # params 개수·타입이 SQL 과 안 맞을 때
+        _chatbot_log("bad_request", started, sql)
+        return JSONResponse({"error": {"code": "bad_request", "message": str(error)}}, status_code=400)
+    _chatbot_log("ok", started, sql, result["row_count"])
+    return result
 
 
 @app.post("/rpc/{name}")
