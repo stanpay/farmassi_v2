@@ -11,13 +11,14 @@ import { adminNavItems } from '../../config/adminNav'
 import { formatDateTime } from '../../lib/format'
 import { supabase } from '../../lib/supabase'
 import { AlimtalkSendDialog } from './AlimtalkSendDialog'
+import { AlimtalkTimeline, type TimelineLog } from './AlimtalkTimeline'
 
 // 알림톡 발송 로그 (관리자). 서버가 1분마다 알리고에 결과를 물어 채운다.
 // 알림톡 실패 사유는 알리고 rslt_message, 대체문자 결과는 sms_list 의 sms_state 그대로다.
 
 type Result = 'pending' | 'alimtalk' | 'sms' | 'failed'
 
-interface LogRow {
+interface LogRow extends Omit<TimelineLog, 'orders'> {
   id: string
   kind: string
   farm_id: string | null
@@ -38,7 +39,7 @@ interface LogRow {
   checked_at: string | null
   alerted_at: string | null
   farms: { name: string } | null
-  orders: { order_no: string } | null
+  orders: ({ order_no: string } & NonNullable<TimelineLog['orders']>) | null
   /** 보낼 때 남긴 주문번호 (주문이 지워져도 남는다) */
   order_no: string | null
 }
@@ -76,7 +77,10 @@ export function AdminAlimtalkLogs() {
   async function load() {
     const { data, error: loadError } = await supabase
       .from('alimtalk_logs')
-      .select('*, farms(name), orders(order_no)')
+      .select(
+        '*, farms(name), orders(order_no, paid_at, deposit_confirmed_at,' +
+          ' deposit_transactions(occurred_at, created_at, provider), shipments(status, tracker_first_event_at, started_at))',
+      )
       .order('created_at', { ascending: false })
       .limit(300)
     if (loadError) setError(loadError.message)
@@ -186,6 +190,10 @@ export function AdminAlimtalkLogs() {
                 )}
                 {expanded && (
                   <dl className="grid grid-cols-[6rem_1fr] gap-x-2 gap-y-1 border-t border-gray-100 pt-2 text-xs">
+                    <dt className="text-muted">시간 (초)</dt>
+                    <dd>
+                      <AlimtalkTimeline log={row} />
+                    </dd>
                     <dt className="text-muted">알림톡 결과</dt>
                     <dd>{row.at_rslt ? `${row.at_rslt} · ${row.at_rslt_message ?? ''}` : '아직 없음'}</dd>
                     <dt className="text-muted">대체문자</dt>
