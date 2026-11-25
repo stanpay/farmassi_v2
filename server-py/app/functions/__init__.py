@@ -1,5 +1,6 @@
 """Edge Function 대체. 이름은 원래 것을 그대로 유지한다 — 프론트 호출부를 고치지 않기 위해서."""
 from .aligo_templates import aligo_templates
+from .dev_test import dev_test
 from .alimtalk_manual import alimtalk_manual
 from .approve_farm import approve_farm
 from .bankda_account_status import bankda_account_status
@@ -23,6 +24,7 @@ from .types import FnCtx, FnHandler, FnResult, fail, ok
 
 FUNCTIONS: dict[str, FnHandler] = {
     "aligo-templates": aligo_templates,
+    "dev-test": dev_test,
     "alimtalk-manual": alimtalk_manual,
     "approve-farm": approve_farm,
     "bankda-account-status": bankda_account_status,
