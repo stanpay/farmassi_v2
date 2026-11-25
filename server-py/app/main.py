@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 import base64
 
+import asyncpg
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -122,8 +123,18 @@ async def auth_me(uid: str | None = Depends(user_id)):
 async def query(request: Request, uid: str | None = Depends(user_id)):
     """데이터 게이트웨이. RLS 가 적용되는 커넥션으로 나간다."""
     body = await request.json()
-    async with db.with_user(uid) as conn:
-        result = await run_query(conn, body)
+    # DB 에 컬럼을 더하는 등 스키마가 바뀌면 커넥션에 캐시된 쿼리 계획이 무효가 되어 첫 요청이
+    # InvalidCachedStatementError 로 실패한다 (asyncpg). 트랜잭션째 버려졌으므로 한 번만 다시 한다.
+    # /query 는 실패하면 트랜잭션이 통째로 되돌려져 다시 해도 안전하다. /rpc 는 외부 호출(알림톡 등)이
+    # 있을 수 있어 다시 하지 않는다.
+    for attempt in (1, 2):
+        try:
+            async with db.with_user(uid) as conn:
+                result = await run_query(conn, body)
+            break
+        except asyncpg.exceptions.InvalidCachedStatementError:
+            if attempt == 2:
+                raise
     return {"data": result.data, "count": result.count, "error": None}
 
 
