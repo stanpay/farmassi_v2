@@ -39,6 +39,8 @@ interface LogRow {
   alerted_at: string | null
   farms: { name: string } | null
   orders: { order_no: string } | null
+  /** 보낼 때 남긴 주문번호 (주문이 지워져도 남는다) */
+  order_no: string | null
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -156,12 +158,14 @@ export function AdminAlimtalkLogs() {
                     <Badge variant={result.variant}>{result.label}</Badge>
                     <span className="font-bold">{KIND_LABEL[row.kind] ?? row.kind}</span>
                     <span className="text-sm text-muted">{row.farms?.name ?? '농가 없음'}</span>
-                    {row.orders?.order_no && <span className="text-xs text-muted">{row.orders.order_no}</span>}
                     {row.sent_by && (
                       <Badge variant="neutral">{row.resend_of ? '재전송' : '수동 발송'}</Badge>
                     )}
                   </div>
                   <div className="flex flex-wrap gap-x-3 text-xs text-muted">
+                    {(row.order_no ?? row.orders?.order_no) && (
+                      <span className="font-medium text-gray-900">주문 {row.order_no ?? row.orders?.order_no}</span>
+                    )}
                     <span>{formatDateTime(row.created_at)}</span>
                     <span>{maskPhone(row.phone)}</span>
                     <span>{row.tpl_code}</span>
