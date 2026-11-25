@@ -182,7 +182,7 @@ export default function App() {
           }
         />
         <Route
-          path="/admin/kakao/logs"
+          path="/admin/kakao"
           element={
             <RequireAdmin>
               <AdminAlimtalkLogs />
@@ -190,13 +190,15 @@ export default function App() {
           }
         />
         <Route
-          path="/admin/kakao"
+          path="/admin/kakao/template"
           element={
             <RequireAdmin>
               <AdminKakao />
             </RequireAdmin>
           }
         />
+        {/* 예전 주소(발송 실패 웹푸시 등)로 들어와도 발송 로그로 간다. */}
+        <Route path="/admin/kakao/logs" element={<Navigate to="/admin/kakao" replace />} />
         <Route
           path="/admin/shipments"
           element={

@@ -106,10 +106,12 @@ export function AdminAlimtalkLogs() {
     <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
       <Header title="카카오톡" subtitle="알림톡 발송 로그" />
       <div className="px-4 py-4 md:px-6 max-w-3xl mx-auto space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <Link to="/admin/kakao" className="text-sm text-primary underline">
-            ← 템플릿 관리
+        <div className="flex justify-end">
+          <Link to="/admin/kakao/template" className="text-sm text-primary underline">
+            템플릿 보기 →
           </Link>
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={onlyFailed} onChange={(e) => setOnlyFailed(e.target.checked)} />
             실패만 보기 {failedCount > 0 && <Badge variant="accent">{failedCount}</Badge>}
