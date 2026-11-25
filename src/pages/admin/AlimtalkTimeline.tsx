@@ -3,7 +3,11 @@
 // 주문완료: 은행 입금(뱅크다 거래 시각) → 뱅크다에서 가져옴 → 입금완료 처리 → 발송
 // 택배번호: 택배사 접수(Delivery Tracker 기록) → 웹훅 수신 → 접수 확인 → 발송
 //          (웹훅이 아니라 조회·등록 직후 조회로 확인했으면 그 경로를 적는다)
+// 배송완료: 택배사 배달완료(Delivery Tracker) → 웹훅 수신 → 배송완료 처리 → 발송 (화면에서 바꿨으면 배송완료 처리만)
+// 회원가입: 가입 → 연락처 저장(처음) → 발송
 // 공통 발송: 발송 요청(서버→알리고) → 알리고 접수 → 카카오 발송 → 결과 수신 → 리포트 → 대체문자 발송
+
+import { formatGap, formatSeconds } from '../../lib/timeFormat'
 
 export interface TimelineDeposit {
   occurred_at: string | null
@@ -17,6 +21,16 @@ export interface TimelineShipment {
   started_at: string | null
   started_via?: string | null
   started_webhook_at?: string | null
+  delivered_at?: string | null
+  delivered_via?: string | null
+  delivered_webhook_at?: string | null
+  tracker_delivered_event_at?: string | null
+}
+
+/** 회원가입 알림톡의 받는 회원 (로그 화면이 따로 읽어 넘긴다) */
+export interface TimelineProfile {
+  created_at: string | null
+  phone_first_set_at: string | null
 }
 
 const VIA_NOTE: Record<string, string> = {
@@ -36,6 +50,7 @@ export interface TimelineLog {
   result: string
   orders: {
     paid_at?: string | null
+    completed_at?: string | null
     deposit_confirmed_at?: string | null
     deposit_transactions?: TimelineDeposit[] | null
     shipments?: TimelineShipment[] | null
@@ -48,37 +63,7 @@ interface Step {
   at: string
 }
 
-const SECONDS = new Intl.DateTimeFormat('ko-KR', {
-  timeZone: 'Asia/Seoul',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hour12: false,
-})
-
-function formatSeconds(value: string) {
-  return SECONDS.format(new Date(value))
-}
-
-/** 앞 단계와의 간격: +2초, +3분 5초, +1시간 2분, +2일 3시간 */
-function gap(fromIso: string, toIso: string) {
-  const diff = Math.round((new Date(toIso).getTime() - new Date(fromIso).getTime()) / 1000)
-  const sign = diff < 0 ? '-' : '+'
-  let s = Math.abs(diff)
-  const d = Math.floor(s / 86400)
-  s -= d * 86400
-  const h = Math.floor(s / 3600)
-  s -= h * 3600
-  const m = Math.floor(s / 60)
-  s -= m * 60
-  const parts = d ? [`${d}일`, h && `${h}시간`] : h ? [`${h}시간`, m && `${m}분`] : m ? [`${m}분`, s && `${s}초`] : [`${s}초`]
-  return sign + parts.filter(Boolean).join(' ')
-}
-
-function steps(log: TimelineLog): Step[] {
+function steps(log: TimelineLog, profile?: TimelineProfile | null): Step[] {
   const out: Step[] = []
   const order = log.orders
   if (log.kind === 'order_done' && order) {
@@ -113,6 +98,28 @@ function steps(log: TimelineLog): Step[] {
       })
     }
   }
+  if (log.kind === 'delivered' && order) {
+    const shipment = (order.shipments ?? []).find((s) => s.status !== 'cancelled' && s.delivered_at)
+    if (shipment?.tracker_delivered_event_at) {
+      out.push({ label: '택배사 배달완료', note: 'Delivery Tracker 기록 시각', at: shipment.tracker_delivered_event_at })
+    }
+    if (shipment?.delivered_webhook_at) {
+      out.push({ label: '웹훅 수신', note: 'Delivery Tracker → 서버', at: shipment.delivered_webhook_at })
+    }
+    if (order.completed_at) {
+      out.push({
+        label: '배송완료 처리',
+        note: shipment ? (VIA_NOTE[shipment.delivered_via ?? ''] ?? '서버 조회로 확인') : '화면에서 상태 변경',
+        at: order.completed_at,
+      })
+    }
+  }
+  if (log.kind === 'signup' && profile) {
+    if (profile.created_at) out.push({ label: '가입', at: profile.created_at })
+    if (profile.phone_first_set_at) {
+      out.push({ label: '연락처 저장', note: '처음 저장 → 회원가입 알림톡', at: profile.phone_first_set_at })
+    }
+  }
   out.push({ label: '발송 요청', note: '서버 → 알리고', at: log.created_at })
   if (log.at_req_at) out.push({ label: '알리고 접수', at: log.at_req_at })
   if (log.at_sent_at) out.push({ label: '카카오 발송', at: log.at_sent_at })
@@ -122,8 +129,8 @@ function steps(log: TimelineLog): Step[] {
   return out
 }
 
-export function AlimtalkTimeline({ log }: { log: TimelineLog }) {
-  const list = steps(log)
+export function AlimtalkTimeline({ log, profile }: { log: TimelineLog; profile?: TimelineProfile | null }) {
+  const list = steps(log, profile)
   return (
     <ol className="space-y-1" aria-label="시간 (초 단위)">
       {list.map((step, i) => (
@@ -133,7 +140,7 @@ export function AlimtalkTimeline({ log }: { log: TimelineLog }) {
             {formatSeconds(step.at)}
             {step.note && <span className="ml-1 font-sans text-muted">· {step.note}</span>}
           </span>
-          <span className="font-mono tabular-nums text-muted">{i > 0 ? gap(list[i - 1].at, step.at) : ''}</span>
+          <span className="font-mono tabular-nums text-muted">{i > 0 ? formatGap(list[i - 1].at, step.at) : ''}</span>
         </li>
       ))}
     </ol>
