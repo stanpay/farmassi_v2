@@ -213,8 +213,9 @@ async def _log(conn: asyncpg.Connection, **row: Any) -> None:
         await conn.execute(
             """insert into public.alimtalk_logs
                  (kind, order_id, user_id, farm_id, phone, tpl_code, sent, mid, message, response,
-                  result, fail_reason, sent_by, resend_of)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14)""",
+                  result, fail_reason, sent_by, resend_of, order_no)
+               values ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14,
+                       (select order_no from public.orders where id = $2::uuid))""",
             row["kind"], row.get("order_id"), row.get("user_id"), row.get("farm_id"),
             row.get("phone"), row.get("tpl_code"), bool(row.get("sent")), row.get("mid"),
             row.get("message"), json.dumps(row.get("response") or {}, ensure_ascii=False),
@@ -259,46 +260,70 @@ async def send_alimtalk(
             return {"sent": False, "skipped": "수신 번호가 없습니다."}
         if not _allowed(receiver):
             return {"sent": False, "skipped": "ALIMTALK_ALLOWED_PHONES 에 없는 번호입니다."}
-        if not force and await _already_sent(conn, kind, order_id, user_id):
-            return {"sent": False, "skipped": "이미 보냈습니다."}
-
-        message = render(tpl["content"], variables)
-        own_key = (os.environ.get("ALIGO_SENDER_KEY") or "").strip()
-        key = own_key if tpl.get("farmassi_only") else ((sender_key or "").strip() or own_key)
-        data: dict[str, Any] = {
-            "apikey": (os.environ.get("ALIGO_API_KEY") or "").strip(),
-            "userid": (os.environ.get("ALIGO_USER_ID") or "").strip(),
-            "senderkey": key,
-            "tpl_code": code,
-            "receiver_1": receiver,
-            "recvname_1": (name or "").strip() or "고객",
-            "subject_1": tpl["name"],
-            "message_1": message,
-            "button_1": json.dumps({"button": tpl["buttons"]}, ensure_ascii=False),
-        }
-        missing = [k for k in ("apikey", "userid", "senderkey") if not data[k]]
-        if missing:
-            raise RuntimeError(f"알리고 설정 없음: {', '.join(missing)}")
-
-        sender = normalize_phone(os.environ.get("ALIGO_SENDER"))
-        if sender:
-            data |= {"sender": sender, "failover": "Y",
-                     "fsubject_1": tpl["name"], "fmessage_1": message}
-
-        result = await _post(data)
-        sent = str(result.get("code")) == "0"
-        mid = (result.get("info") or {}).get("mid")
-        await _log(conn, **base, phone=receiver, sent=sent, mid=str(mid) if mid else None,
-                   message=message, response=result,
-                   fail_reason=None if sent else f"발송 요청 거절: {result.get('message')}")
-        if not sent:
-            print("알림톡 발송 거절", kind, code, result.get("message"))
-        return {"sent": sent, "mid": mid, "message": result.get("message"), "text": message}
+        # 같은 주문·종류를 여러 경로(입금 확인 훅, 화면, 누락 확인 루프)가 동시에 보내지 않게
+        # 확인→발송→기록을 한 번에 하나만. 수동 발송(force)은 일부러 다시 보내는 것이라 잠그지 않는다.
+        if not force and (order_id or user_id):
+            lock_key = f"alimtalk:{kind}:{order_id or user_id}"
+            if conn.is_in_transaction():
+                # 서버 커넥션(db.with_admin)은 트랜잭션 안이다. 발송 기록은 커밋돼야 남에게 보이므로
+                # 잠금도 커밋까지 쥔다(xact lock). 먼저 풀면 다른 경로가 기록을 못 보고 또 보낸다
+                # (11/25 시험에서 실제로 두 번 나갔다).
+                await conn.execute("select pg_advisory_xact_lock(hashtext($1))", lock_key)
+            else:
+                await conn.execute("select pg_advisory_lock(hashtext($1))", lock_key)
+            try:
+                if await _already_sent(conn, kind, order_id, user_id):
+                    return {"sent": False, "skipped": "이미 보냈습니다."}
+                return await _send(conn, tpl, code, base, kind=kind, receiver=receiver, name=name,
+                                   variables=variables, sender_key=sender_key)
+            finally:
+                if not conn.is_in_transaction():
+                    await conn.execute("select pg_advisory_unlock(hashtext($1))", lock_key)
+        return await _send(conn, tpl, code, base, kind=kind, receiver=receiver, name=name,
+                           variables=variables, sender_key=sender_key)
     except Exception as error:  # noqa: BLE001
         print("알림톡 발송 실패", kind, code, error)
         await _log(conn, **base, phone=normalize_phone(phone), sent=False,
                    response={"error": str(error)}, fail_reason=f"발송 오류: {error}")
         return {"sent": False, "error": str(error)}
+
+
+async def _send(conn: asyncpg.Connection, tpl: dict[str, Any], code: str, base: dict[str, Any], *,
+                kind: str, receiver: str, name: str | None, variables: dict[str, Any],
+                sender_key: str | None) -> dict[str, Any]:
+    """실제 발송 + 기록. 예외는 부른 쪽(send_alimtalk)이 기록한다."""
+    message = render(tpl["content"], variables)
+    own_key = (os.environ.get("ALIGO_SENDER_KEY") or "").strip()
+    key = own_key if tpl.get("farmassi_only") else ((sender_key or "").strip() or own_key)
+    data: dict[str, Any] = {
+        "apikey": (os.environ.get("ALIGO_API_KEY") or "").strip(),
+        "userid": (os.environ.get("ALIGO_USER_ID") or "").strip(),
+        "senderkey": key,
+        "tpl_code": code,
+        "receiver_1": receiver,
+        "recvname_1": (name or "").strip() or "고객",
+        "subject_1": tpl["name"],
+        "message_1": message,
+        "button_1": json.dumps({"button": tpl["buttons"]}, ensure_ascii=False),
+    }
+    missing = [k for k in ("apikey", "userid", "senderkey") if not data[k]]
+    if missing:
+        raise RuntimeError(f"알리고 설정 없음: {', '.join(missing)}")
+
+    sender = normalize_phone(os.environ.get("ALIGO_SENDER"))
+    if sender:
+        data |= {"sender": sender, "failover": "Y",
+                 "fsubject_1": tpl["name"], "fmessage_1": message}
+
+    result = await _post(data)
+    sent = str(result.get("code")) == "0"
+    mid = (result.get("info") or {}).get("mid")
+    await _log(conn, **base, phone=receiver, sent=sent, mid=str(mid) if mid else None,
+               message=message, response=result,
+               fail_reason=None if sent else f"발송 요청 거절: {result.get('message')}")
+    if not sent:
+        print("알림톡 발송 거절", kind, code, result.get("message"))
+    return {"sent": sent, "mid": mid, "message": result.get("message"), "text": message}
 
 
 # ---- 주문 알림 ----------------------------------------------------------------
@@ -434,6 +459,32 @@ async def notify_order(conn: asyncpg.Connection, kind: str, order_id: str) -> di
 async def notify_order_done(conn: asyncpg.Connection, order_id: str) -> dict[str, Any]:
     """입금 확정 직후 부른다."""
     return await notify_order(conn, "order_done", order_id)
+
+
+#: 입금완료가 된 뒤 이 시간 안에 주문완료 알림톡 기록이 없으면 서버가 보낸다.
+#: 더 오래된 주문에 뒤늦게 '주문 접수' 안내가 가지 않게 짧게 둔다.
+ORDER_DONE_CATCHUP_HOURS = 2
+
+
+async def send_missing_order_done(conn: asyncpg.Connection) -> int:
+    """입금완료(orders.paid_at)인데 주문완료 알림톡 기록이 없는 주문에 보낸다.
+
+    입금 확인 훅·화면 상태 변경이 각각 바로 보내지만, 화면이 닫히거나 DB 를 직접 고친 경우를
+    여기서 잡는다. 기록이 하나라도 있으면(성공·실패 무관) 다시 보내지 않는다 — 실패는 관리자가
+    로그에서 재전송한다. 이미 보낸 주문은 send_alimtalk 의 확인이 한 번 더 막는다.
+    """
+    rows = await conn.fetch(
+        f"""select o.id from public.orders o
+             where o.status = 'paid'
+               and o.paid_at > now() - interval '{ORDER_DONE_CATCHUP_HOURS} hours'
+               and not exists (select 1 from public.alimtalk_logs l
+                                where l.order_id = o.id and l.kind = 'order_done')
+             order by o.paid_at limit 50""")
+    sent = 0
+    for row in rows:
+        result = await notify_order(conn, "order_done", str(row["id"]))
+        sent += 1 if result.get("sent") else 0
+    return sent
 
 
 async def notify_signup(conn: asyncpg.Connection, user_id: str) -> dict[str, Any]:
