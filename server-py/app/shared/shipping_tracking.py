@@ -24,7 +24,9 @@ from . import delivery_tracker
 from .alimtalk import notify_order
 
 CHECK_EVERY_MINUTES = 10   # 같은 송장을 다시 볼 간격 (웹훅이 없을 때)
-CHECK_WITH_WEBHOOK_MINUTES = 60  # 웹훅이 걸려 있으면 조회는 놓친 경우 대비로만
+CHECK_WITH_WEBHOOK_MINUTES = 60  # 웹훅이 실제로 오는 송장은 조회를 놓친 경우 대비로만
+# 웹훅을 '걸었다'만으로는 늘리지 않는다. 11/26 시험에서 등록은 성공했는데 콜백이 오지 않았다.
+# 그 송장으로 웹훅을 한 번이라도 받았을 때(tracker_webhook_last_at)만 60분으로 늘린다.
 RETRY_WEBHOOK_MINUTES = 30  # 웹훅 등록이 실패하면 이만큼 뒤에 다시
 RENEW_BEFORE_HOURS = 24    # 웹훅 만료가 이 안으로 다가오면 연장 (문서: 48시간, 24시간마다 연장)
 GIVE_UP_DAYS = 14          # 등록 후 이 기간 안에 접수가 안 뜨면 더 보지 않는다
@@ -153,7 +155,7 @@ async def handle_webhook(conn: asyncpg.Connection, event_id: str) -> str:
             outcome = await check_one(conn, shipment, via="webhook", webhook_at=event["received_at"])
     await conn.execute(
         """update public.delivery_webhook_events
-              set shipment_id = $2, outcome = $3, processed_at = now() where id = $1""",
+              set shipment_id = $2, outcome = $3, processed_at = clock_timestamp() where id = $1""",
         event_id, shipment_id, outcome)
     return outcome
 
@@ -224,7 +226,7 @@ async def check_pending(conn: asyncpg.Connection) -> dict[str, int]:
                and s.created_at > now() - interval '{GIVE_UP_DAYS} days'
                and (s.tracker_checked_at is null
                     or s.tracker_checked_at < now() - case
-                         when s.tracker_webhook_expires_at > now()
+                         when s.tracker_webhook_expires_at > now() and s.tracker_webhook_last_at is not null
                          then interval '{CHECK_WITH_WEBHOOK_MINUTES} minutes'
                          else interval '{CHECK_EVERY_MINUTES} minutes' end)
              order by s.tracker_checked_at nulls first
