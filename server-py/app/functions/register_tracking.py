@@ -59,7 +59,7 @@ async def register_tracking(ctx: FnCtx) -> FnResult:
                           started_at = null, tracker_status = null, tracker_status_name = null,
                           tracker_description = null, tracker_event_at = null,
                           tracker_checked_at = null, tracker_check_count = 0, tracker_error = null,
-                          tracker_first_event_at = null, started_via = null, started_webhook_at = null,
+                          tracker_first_event_at = null, tracker_first_event_name = null, started_via = null, started_webhook_at = null,
                           delivered_at = null, delivered_via = null, delivered_webhook_at = null,
                           tracker_delivered_event_at = null, tracker_webhook_expires_at = null,
                           tracker_webhook_error = null, tracker_webhook_tried_at = null,
