@@ -213,10 +213,19 @@ async def check_one(conn: asyncpg.Connection, shipment: Any, *, via: str = "poll
                   tracker_check_count = tracker_check_count + 1, tracker_error = null,
                   tracker_status = $2, tracker_status_name = $3, tracker_description = $4,
                   tracker_event_at = $5::timestamptz,
-                  tracker_first_event_at = coalesce(tracker_first_event_at, $6::timestamptz)
+                  -- 배송시작 = 택배사 기록 중 가장 이른 것. 나중에 더 이른 기록이 붙으면 바꾼다.
+                  tracker_first_event_name = case
+                    when $6::timestamptz is not null and (tracker_first_event_at is null
+                         or $6::timestamptz < tracker_first_event_at) then $7
+                    else tracker_first_event_name end,
+                  tracker_first_event_at = case
+                    when $6::timestamptz is not null and (tracker_first_event_at is null
+                         or $6::timestamptz < tracker_first_event_at) then $6::timestamptz
+                    else tracker_first_event_at end
             where id = $1""",
         shipment["id"], last.get("code"), last.get("name"), last.get("description"),
-        last.get("time"), recent[0].get("time") if recent else None)
+        last.get("time"), recent[0].get("time") if recent else None,
+        (recent[0].get("name") or recent[0].get("code")) if recent else None)
     if not recent:
         return "waiting"
     delivered = next((e for e in recent if e.get("code") == "DELIVERED"), None)

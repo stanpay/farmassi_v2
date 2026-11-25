@@ -57,4 +57,6 @@ alter table public.shipments
   add column if not exists delivered_at               timestamptz,
   add column if not exists delivered_via              text,
   add column if not exists delivered_webhook_at       timestamptz,
-  add column if not exists tracker_delivered_event_at timestamptz;
+  add column if not exists tracker_delivered_event_at timestamptz,
+  -- 배송시작: 이번 배송의 택배사 기록 중 가장 이른 것의 이름 (시각은 tracker_first_event_at)
+  add column if not exists tracker_first_event_name   text;
