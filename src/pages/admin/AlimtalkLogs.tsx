@@ -6,7 +6,7 @@ import { FarmFilterChips } from '../../components/shared/FarmFilterChips'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
-import { ErrorText, PageSpinner } from '../../components/ui/Feedback'
+import { PageSpinner } from '../../components/ui/Feedback'
 import { adminNavItems } from '../../config/adminNav'
 import { formatDateTime } from '../../lib/format'
 import { supabase } from '../../lib/supabase'
@@ -68,6 +68,7 @@ function maskPhone(phone: string | null) {
 export function AdminAlimtalkLogs() {
   const [rows, setRows] = useState<LogRow[] | null>(null)
   const [error, setError] = useState('')
+  const [failedAt, setFailedAt] = useState<string | null>(null)
   const [farmId, setFarmId] = useState<string | 'all'>('all')
   const [onlyFailed, setOnlyFailed] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
@@ -83,7 +84,17 @@ export function AdminAlimtalkLogs() {
       )
       .order('created_at', { ascending: false })
       .limit(300)
-    if (loadError) setError(loadError.message)
+    // 1분마다 다시 읽는다. 한 번 실패했다고 목록을 비우지 않는다 — 전에 읽은 목록을 두고
+    // 위에 '새로고침 실패'만 알린다. 다음에 성공하면 알림을 지운다 (11/25: 서버 재시작·DB 변경 중
+    // 한 번 실패하면 화면이 비고 새로고침 전까지 돌아오지 않았다).
+    if (loadError) {
+      setError(loadError.message)
+      setFailedAt(new Date().toISOString())
+      setRows((prev) => prev ?? [])
+      return
+    }
+    setError('')
+    setFailedAt(null)
     setRows((data as LogRow[]) ?? [])
   }
 
@@ -141,12 +152,24 @@ export function AdminAlimtalkLogs() {
 
         <FarmFilterChips farms={farms} selectedId={farmId} onSelect={setFarmId} allCount={rows?.length ?? 0} />
 
+        {error && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <span>
+              로그를 다시 읽지 못했습니다
+              {failedAt && ` (${new Date(failedAt).toLocaleTimeString('ko-KR', { hour12: false })})`}: {error}.{' '}
+              {rows && rows.length > 0 ? '아래는 직전에 읽은 목록입니다. ' : ''}1분 뒤 다시 시도합니다.
+            </span>
+            <Button type="button" size="sm" variant="outline" onClick={() => void load()}>
+              지금 다시 시도
+            </Button>
+          </div>
+        )}
         {rows === null ? (
           <PageSpinner label="로그 불러오는 중..." />
-        ) : error ? (
-          <ErrorText>{error}</ErrorText>
         ) : visible.length === 0 ? (
-          <p className="text-sm text-muted">{onlyFailed ? '실패한 발송이 없습니다.' : '발송 기록이 없습니다.'}</p>
+          error ? null : (
+            <p className="text-sm text-muted">{onlyFailed ? '실패한 발송이 없습니다.' : '발송 기록이 없습니다.'}</p>
+          )
         ) : (
           visible.map((row) => {
             const result = RESULT_LABEL[row.result] ?? RESULT_LABEL.pending
