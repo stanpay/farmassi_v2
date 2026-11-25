@@ -5,8 +5,11 @@ Node 서버(server/)를 옮기는 중이다. 두 서버가 동시에 떠 있어�
 경로별로 nginx 에서 넘긴다. 응답 형태는 Node 쪽과 같아야 한다 —
 프론트가 그 형태에 맞춰져 있고 거슬러 올라가면 PostgREST 형식이다.
 """
+import asyncio
+import hmac
 import json
 import os
+import re
 import traceback
 from contextlib import asynccontextmanager
 
@@ -18,6 +21,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import db
+from .shared import delivery_tracker
+from .shared.shipping_tracking import handle_webhook as handle_delivery_webhook
 from .config import config
 from .jwt_session import sign, verify
 from .functions import FUNCTIONS, FnCtx
@@ -136,6 +141,46 @@ async def query(request: Request, uid: str | None = Depends(user_id)):
             if attempt == 2:
                 raise
     return {"data": result.data, "count": result.count, "error": None}
+
+
+# Delivery Tracker 웹훅. 서명이 없어서 주소에 비밀 토큰을 넣고, 받은 내용은 다시 조회해 확인한다.
+# 문서 권장: 1초 안에 202. 받은 시각만 남기고 처리는 뒤에서 한다.
+_webhook_tasks: set[asyncio.Task] = set()
+
+
+async def _process_delivery_webhook(event_id: str) -> None:
+    try:
+        async with db.with_admin() as conn:
+            await handle_delivery_webhook(conn, event_id)
+    except Exception as error:  # noqa: BLE001
+        traceback.print_exc()
+        async with db.with_admin() as conn:
+            await conn.execute(
+                "update public.delivery_webhook_events set outcome = 'error', error = $2,"
+                " processed_at = now() where id = $1", event_id, str(error)[:500])
+
+
+@app.post("/webhooks/delivery-tracker/{token}")
+async def delivery_tracker_webhook(token: str, request: Request):
+    expected = delivery_tracker.webhook_token()
+    if not expected or not hmac.compare_digest(token.encode(), expected.encode()):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    carrier_id = str(body.get("carrierId") or "")[:64]
+    number = re.sub(r"[\s-]", "", str(body.get("trackingNumber") or ""))[:40]
+    async with db.with_admin() as conn:
+        event_id = await conn.fetchval(
+            """insert into public.delivery_webhook_events (carrier_id, tracking_number)
+               values ($1, $2) returning id""", carrier_id, number)
+    task = asyncio.create_task(_process_delivery_webhook(str(event_id)))
+    _webhook_tasks.add(task)
+    task.add_done_callback(_webhook_tasks.discard)
+    return Response(status_code=202)
 
 
 @app.post("/rpc/{name}")
