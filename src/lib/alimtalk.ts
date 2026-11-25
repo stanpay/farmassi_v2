@@ -4,14 +4,14 @@ import type { OrderStatus } from '../types/models'
 /**
  * 주문 상태를 바꾼 뒤 손님에게 알림톡을 보낸다 (서버 RPC notify-alimtalk).
  *
- * - 송장 발급 완료(packing) → 택배번호 안내 (송장번호가 없으면 서버가 건너뜀)
  * - 배송완료(completed) → 배송완료 안내
+ * - 택배번호(배송시작) 안내는 여기서 보내지 않는다. 송장을 직접 등록하면 서버가 Delivery Tracker 로
+ *   택배사 접수를 확인한 뒤 보낸다 (shared/shipping_tracking.py). 상태만 바꿔서는 나가지 않는다.
  * - 입금완료(paid) → 주문완료 안내. 입금 확인 경로에서 이미 보냈으면 서버가 다시 보내지 않는다.
  *
  * 발송 실패가 상태 변경을 막지 않도록 기다리지 않고 콘솔에만 남긴다.
  */
-const KIND_BY_STATUS: Partial<Record<OrderStatus, 'tracking' | 'delivered' | 'order_done'>> = {
-  packing: 'tracking',
+const KIND_BY_STATUS: Partial<Record<OrderStatus, 'delivered' | 'order_done'>> = {
   completed: 'delivered',
   paid: 'order_done',
 }

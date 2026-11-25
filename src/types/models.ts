@@ -13,7 +13,7 @@ export type OrderStatus =
   | 'cancelled'
 export type NotificationType = 'order_created' | 'deposit_confirmed' | 'shipment_requested'
 export type DepositProvider = 'manual' | 'gnd' | 'hecto' | 'banksalad' | 'codef' | 'bankda' | 'callback'
-export type ShipmentStatus = 'draft' | 'requested' | 'printed' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'requested' | 'printed' | 'registered' | 'cancelled'
 export type MatchStatus = 'unmatched' | 'matched' | 'ignored'
 export type ProductSaleStatus = 'on_sale' | 'coming_soon' | 'sold_out' | 'hidden' | 'inquiry'
 
@@ -234,6 +234,17 @@ export interface Shipment {
   requested_at: string | null
   created_at: string
   updated_at: string
+  /** Delivery Tracker 택배사 ID (직접 등록한 송장). kr.epost 등 */
+  carrier_id?: string | null
+  /** Delivery Tracker 마지막 이벤트 */
+  tracker_status?: string | null
+  tracker_status_name?: string | null
+  tracker_description?: string | null
+  tracker_event_at?: string | null
+  tracker_checked_at?: string | null
+  tracker_error?: string | null
+  /** 택배사 접수 확인 → 배송중·배송시작 알림톡 처리 시각 */
+  started_at?: string | null
 }
 
 export interface DepositTransaction {
