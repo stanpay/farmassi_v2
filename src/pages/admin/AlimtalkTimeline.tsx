@@ -1,7 +1,8 @@
 // 알림톡 1건이 나가기까지의 시각을 초 단위로 (카카오톡 발송 로그 펼침).
 //
 // 주문완료: 은행 입금(뱅크다 거래 시각) → 뱅크다에서 가져옴 → 입금완료 처리 → 발송
-// 택배번호: 택배사 접수(Delivery Tracker 기록) → 접수 확인(서버 조회) → 발송
+// 택배번호: 택배사 접수(Delivery Tracker 기록) → 웹훅 수신 → 접수 확인 → 발송
+//          (웹훅이 아니라 조회·등록 직후 조회로 확인했으면 그 경로를 적는다)
 // 공통 발송: 발송 요청(서버→알리고) → 알리고 접수 → 카카오 발송 → 결과 수신 → 리포트 → 대체문자 발송
 
 export interface TimelineDeposit {
@@ -14,6 +15,14 @@ export interface TimelineShipment {
   status: string
   tracker_first_event_at: string | null
   started_at: string | null
+  started_via?: string | null
+  started_webhook_at?: string | null
+}
+
+const VIA_NOTE: Record<string, string> = {
+  webhook: '웹훅을 받고 다시 조회해 확인',
+  poll: '서버 정기 조회로 확인 (웹훅 못 받음)',
+  register: '송장 등록 직후 조회로 확인',
 }
 
 export interface TimelineLog {
@@ -93,8 +102,15 @@ function steps(log: TimelineLog): Step[] {
     if (shipment?.tracker_first_event_at) {
       out.push({ label: '택배사 접수', note: 'Delivery Tracker 기록 시각', at: shipment.tracker_first_event_at })
     }
+    if (shipment?.started_webhook_at) {
+      out.push({ label: '웹훅 수신', note: 'Delivery Tracker → 서버', at: shipment.started_webhook_at })
+    }
     if (shipment?.started_at) {
-      out.push({ label: '접수 확인', note: '서버 조회(10분 간격, 웹훅 아님)', at: shipment.started_at })
+      out.push({
+        label: '접수 확인',
+        note: VIA_NOTE[shipment.started_via ?? ''] ?? '서버 조회로 확인',
+        at: shipment.started_at,
+      })
     }
   }
   out.push({ label: '발송 요청', note: '서버 → 알리고', at: log.created_at })
