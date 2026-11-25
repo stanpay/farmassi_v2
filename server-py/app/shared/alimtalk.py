@@ -218,7 +218,8 @@ async def _log(conn: asyncpg.Connection, **row: Any) -> None:
                        (select order_no from public.orders where id = $2::uuid))""",
             row["kind"], row.get("order_id"), row.get("user_id"), row.get("farm_id"),
             row.get("phone"), row.get("tpl_code"), bool(row.get("sent")), row.get("mid"),
-            row.get("message"), json.dumps(row.get("response") or {}, ensure_ascii=False),
+            # jsonb 는 커넥션 코덱이 직렬화한다(db.py). 여기서 json.dumps 하면 문자열로 두 번 감싸진다.
+            row.get("message"), row.get("response") or {},
             # 접수조차 안 된 건 바로 실패. 접수된 건은 결과 확인(alimtalk_results)이 채운다.
             "pending" if row.get("sent") else "failed",
             None if row.get("sent") else row.get("fail_reason"),
