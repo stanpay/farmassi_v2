@@ -13,6 +13,8 @@ import { supabase } from '../../lib/supabase'
 import { AlimtalkSendDialog } from './AlimtalkSendDialog'
 import { AlimtalkTimeline, type TimelineLog, type TimelineProfile } from './AlimtalkTimeline'
 import { DeliveryWebhookEvents } from './DeliveryWebhookEvents'
+import { DevTestTools } from './DevTestTools'
+import { useDevTestEnabled } from '../../lib/useDevTestEnabled'
 
 // 알림톡 발송 로그 (관리자). 서버가 1분마다 알리고에 결과를 물어 채운다.
 // 알림톡 실패 사유는 알리고 rslt_message, 대체문자 결과는 sms_list 의 sms_state 그대로다.
@@ -78,6 +80,8 @@ export function AdminAlimtalkLogs() {
   const [profiles, setProfiles] = useState<Record<string, TimelineProfile>>({})
   // 알림톡 발송 로그 / 배송 웹훅 수신 기록
   const [view, setView] = useState<'logs' | 'webhooks'>('logs')
+  const devTestEnabled = useDevTestEnabled()
+  const [testing, setTesting] = useState(false)
 
   async function load() {
     const { data, error: loadError } = await supabase
@@ -146,9 +150,16 @@ export function AdminAlimtalkLogs() {
       <Header title="카카오톡" subtitle={view === 'logs' ? '알림톡 발송 로그' : '배송 웹훅 수신 기록'} />
       <div className="px-4 py-4 md:px-6 max-w-3xl mx-auto space-y-4">
         <div className="flex items-center justify-between gap-2">
-          <Button type="button" onClick={() => setSending('new')}>
-            수동 발송
-          </Button>
+          <div className="flex gap-2">
+            <Button type="button" onClick={() => setSending('new')}>
+              수동 발송
+            </Button>
+            {devTestEnabled && (
+              <Button type="button" variant="outline" onClick={() => setTesting(true)}>
+                시험 도구 (dev)
+              </Button>
+            )}
+          </div>
           <Link to="/admin/kakao/template" className="text-sm text-primary underline">
             템플릿 보기 →
           </Link>
@@ -273,6 +284,7 @@ export function AdminAlimtalkLogs() {
         </>
         )}
       </div>
+      <DevTestTools open={testing} onClose={() => setTesting(false)} onChanged={() => void load()} />
       <AlimtalkSendDialog
         open={sending !== null}
         logId={sending && sending !== 'new' ? sending : null}
