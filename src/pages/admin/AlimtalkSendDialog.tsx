@@ -31,6 +31,8 @@ interface Prepared {
   recipientName: string | null
   recipientPhone: string | null
   variables: Record<string, string>
+  /** 주문·회원이 없는 기록의 재전송: 처음 보낸 번호로 간다. */
+  fromLog?: boolean
 }
 
 interface SendResult {
@@ -264,8 +266,20 @@ export function AlimtalkSendDialog({
                 </dd>
                 <dt className="text-muted">받는 사람</dt>
                 <dd>
-                  {prepared.recipientName ?? '이름 없음'} · {prepared.recipientPhone ?? '휴대폰 번호 없음'}
+                  {prepared.recipientName ? `${prepared.recipientName} · ` : ''}
+                  {prepared.recipientPhone ?? '휴대폰 번호 없음'}
+                  {prepared.fromLog && (
+                    <span className="block text-xs text-muted">
+                      주문·회원 정보가 없는 기록이라 처음 보냈던 번호로 보냅니다. 변수는 그때 보낸 내용에서 채웠습니다.
+                    </span>
+                  )}
                 </dd>
+                {!prepared.orderNo && prepared.farmName && (
+                  <>
+                    <dt className="text-muted">농가</dt>
+                    <dd>{prepared.farmName}</dd>
+                  </>
+                )}
                 {prepared.orderNo && (
                   <>
                     <dt className="text-muted">주문</dt>
