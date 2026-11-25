@@ -57,12 +57,6 @@ const RESULT_LABEL: Record<Result, { label: string; variant: 'primary' | 'accent
 
 const NO_FARM = 'none'
 
-/** 재전송은 받는 사람을 다시 찾을 수 있을 때만 (주문 알림은 주문, 회원가입은 회원). */
-function resendBlocked(row: LogRow) {
-  if (row.kind === 'signup') return row.user_id ? null : '회원 정보가 없는 시험 발송이라 재전송할 수 없습니다.'
-  return row.order_id ? null : '주문이 없는 시험 발송이라 재전송할 수 없습니다.'
-}
-
 function maskPhone(phone: string | null) {
   if (!phone) return '번호 없음'
   return phone.length >= 10 ? `${phone.slice(0, 3)}-****-${phone.slice(-4)}` : phone
@@ -174,15 +168,18 @@ export function AdminAlimtalkLogs() {
                   </div>
                   {row.fail_reason && <p className="text-sm text-red-600">{row.fail_reason}</p>}
                 </button>
-                <div className="flex justify-end">
-                  {resendBlocked(row) ? (
-                    expanded && <span className="text-xs text-muted">{resendBlocked(row)}</span>
-                  ) : (
-                    <Button type="button" variant="ghost" onClick={() => setSending(row.id)}>
+                {/* 실패·문자로 도착 포함 모든 건. 주문·회원이 없는 기록은 처음 보낸 번호로 다시 보낸다. */}
+                {row.phone && (
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant={row.result === 'failed' ? 'primary' : 'ghost'}
+                      onClick={() => setSending(row.id)}
+                    >
                       재전송
                     </Button>
-                  )}
-                </div>
+                  </div>
+                )}
                 {expanded && (
                   <dl className="grid grid-cols-[6rem_1fr] gap-x-2 gap-y-1 border-t border-gray-100 pt-2 text-xs">
                     <dt className="text-muted">알림톡 결과</dt>
