@@ -17,6 +17,7 @@ import asyncpg
 from . import db
 from .config import config
 from .functions import FUNCTIONS, FnCtx
+from .shared.alimtalk import send_missing_order_done
 from .shared.alimtalk_results import check_pending as check_alimtalk_results
 from .shared.bankda import list_accounts
 from .shared.holidays import sync as sync_holidays
@@ -98,6 +99,14 @@ async def _alimtalk_loop() -> None:
     """알림톡 도착 결과 확인. 확인할 건이 없으면 DB 조회 한 번으로 끝난다."""
     await asyncio.sleep(40)
     while True:
+        # 누락분 발송과 결과 확인은 따로 잡는다. 한쪽이 실패해도 다른 쪽은 돈다.
+        try:
+            async with db.with_admin() as conn:
+                caught = await send_missing_order_done(conn)
+            if caught:
+                log(f"주문완료 알림톡 누락분 발송: {caught}건")
+        except Exception as error:  # noqa: BLE001
+            log(f"주문완료 알림톡 누락 확인 실패: {error}")
         try:
             async with db.with_admin() as conn:
                 counts = await check_alimtalk_results(conn)
