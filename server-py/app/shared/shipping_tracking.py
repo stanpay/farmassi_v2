@@ -85,7 +85,7 @@ async def _alert_auth(conn: asyncpg.Connection, error: delivery_tracker.TrackerE
 
 
 async def start_shipment(conn: asyncpg.Connection, shipment_id: str, *, via: str = "poll",
-                         webhook_at: Any = None) -> dict[str, Any]:
+                         webhook_at: Any = None, notify: bool = True) -> dict[str, Any]:
     """접수 확인된 송장 1건 처리: 주문 배송중 + 배송시작 알림톡 + started_at.
 
     웹훅과 조회가 동시에 들어와도 한 번만: 송장 행을 잠그고(커밋까지) started_at 을 다시 본다.
@@ -101,11 +101,35 @@ async def start_shipment(conn: asyncpg.Connection, shipment_id: str, *, via: str
         await conn.execute(
             "update public.orders set status = 'shipping', updated_at = now() where id = $1",
             row["order_id"])
-    result = await notify_order(conn, "tracking", str(row["order_id"]))
+    # 처음 확인했을 때 이미 배달완료면 배송시작 알림톡은 건너뛰고 배송완료만 보낸다.
+    result = await notify_order(conn, "tracking", str(row["order_id"])) if notify else None
     await conn.execute(
         """update public.shipments set started_at = now(), started_via = $2,
                   started_webhook_at = $3::timestamptz
             where id = $1""", shipment_id, via, webhook_at)
+    return {"alimtalk": result}
+
+
+async def deliver_shipment(conn: asyncpg.Connection, shipment_id: str, *, event_at: Any,
+                           via: str = "poll", webhook_at: Any = None) -> dict[str, Any]:
+    """배달완료 확인된 송장 1건: 주문 배송완료 + 배송완료 알림톡 + delivered_at. 한 번만."""
+    row = await conn.fetchrow(
+        """select s.order_id, o.status from public.shipments s
+             join public.orders o on o.id = s.order_id
+            where s.id = $1 and s.delivered_at is null
+            for update of s""", shipment_id)
+    if not row:
+        return {"skipped": "이미 처리했습니다."}
+    if row["status"] in ("paid", "packing", "shipping"):
+        await conn.execute(
+            "update public.orders set status = 'completed' where id = $1", row["order_id"])
+    # 화면에서 이미 배송완료로 바꿔 알림톡을 보냈다면 여기서는 '이미 보냈습니다'로 끝난다.
+    result = await notify_order(conn, "delivered", str(row["order_id"]))
+    await conn.execute(
+        """update public.shipments set delivered_at = now(), delivered_via = $2,
+                  delivered_webhook_at = $3::timestamptz,
+                  tracker_delivered_event_at = $4::timestamptz
+            where id = $1""", shipment_id, via, webhook_at, event_at)
     return {"alimtalk": result}
 
 
@@ -137,7 +161,8 @@ async def handle_webhook(conn: asyncpg.Connection, event_id: str) -> str:
         "select carrier_id, tracking_number, received_at from public.delivery_webhook_events"
         " where id = $1", event_id)
     shipment = await conn.fetchrow(
-        """select id, carrier_id, tracking_number, requested_at, created_at, started_at
+        """select id, carrier_id, tracking_number, requested_at, created_at, started_at,
+                  delivered_at
              from public.shipments
             where carrier_id = $1 and tracking_number = $2 and status = 'registered'
             order by created_at desc limit 1""",
@@ -149,8 +174,8 @@ async def handle_webhook(conn: asyncpg.Connection, event_id: str) -> str:
         await conn.execute(
             "update public.shipments set tracker_webhook_last_at = $2 where id = $1",
             shipment_id, event["received_at"])
-        if shipment["started_at"]:
-            outcome = "already_started"
+        if shipment["delivered_at"]:
+            outcome = "already_delivered"
         else:
             outcome = await check_one(conn, shipment, via="webhook", webhook_at=event["received_at"])
     await conn.execute(
@@ -162,7 +187,11 @@ async def handle_webhook(conn: asyncpg.Connection, event_id: str) -> str:
 
 async def check_one(conn: asyncpg.Connection, shipment: Any, *, via: str = "poll",
                     webhook_at: Any = None) -> str:
-    """송장 1건 조회. 돌려주는 값: started / waiting / error / auth_error."""
+    """송장 1건 조회.
+
+    돌려주는 값: waiting(기록 없음) / started(접수 처리) / in_transit(이미 접수, 배달 전) /
+    delivered(배달완료 처리) / already_started·already_delivered(다른 경로가 먼저 처리) / error / auth_error
+    """
     try:
         info = await delivery_tracker.track(shipment["carrier_id"], shipment["tracking_number"])
     except delivery_tracker.TrackerError as error:
@@ -190,23 +219,37 @@ async def check_one(conn: asyncpg.Connection, shipment: Any, *, via: str = "poll
         last.get("time"), recent[0].get("time") if recent else None)
     if not recent:
         return "waiting"
-    done = await start_shipment(conn, str(shipment["id"]), via=via, webhook_at=webhook_at)
-    # 웹훅·조회가 겹치면 먼저 잡은 쪽만 처리한다. 나머지는 already_started.
-    return "already_started" if "skipped" in done else "started"
+    delivered = next((e for e in recent if e.get("code") == "DELIVERED"), None)
+    outcome = "in_transit"
+    if not shipment["started_at"]:
+        done = await start_shipment(conn, str(shipment["id"]), via=via, webhook_at=webhook_at,
+                                    notify=delivered is None)
+        # 웹훅·조회가 겹치면 먼저 잡은 쪽만 처리한다. 나머지는 already_started.
+        outcome = "already_started" if "skipped" in done else "started"
+    if delivered and not shipment["delivered_at"]:
+        done = await deliver_shipment(conn, str(shipment["id"]), event_at=delivered.get("time"),
+                                      via=via, webhook_at=webhook_at)
+        outcome = "already_delivered" if "skipped" in done else "delivered"
+    return outcome
 
 
 async def check_pending(conn: asyncpg.Connection) -> dict[str, int]:
-    """등록됐지만 아직 접수 전인 송장을 조회한다. 키가 없으면 아무것도 하지 않는다."""
+    """등록됐지만 아직 배달완료 전인 송장을 조회한다(접수·배달완료 확인). 키가 없으면 아무것도 하지 않는다.
+
+    화면에서 주문을 배송완료로 바꾸면(주문 상태가 paid·packing·shipping 이 아님) 더 보지 않는다.
+    """
     counts = {"checked": 0, "started": 0, "waiting": 0, "error": 0, "webhook_renewed": 0}
     if not delivery_tracker.configured():
         return counts
-    # 웹훅 걸기·연장: 접수 전 송장 중 웹훅이 없거나 만료가 다가온 것.
+    # 웹훅 걸기·연장: 배달완료 전 송장 중 웹훅이 없거나 만료가 다가온 것.
     if delivery_tracker.webhook_url():
         renew = await conn.fetch(
             f"""select s.id, s.carrier_id, s.tracking_number
                   from public.shipments s
+                  join public.orders o on o.id = s.order_id
                  where s.status = 'registered' and s.tracking_number is not null
-                   and s.carrier_id is not null and s.started_at is null
+                   and s.carrier_id is not null and s.delivered_at is null
+                   and o.status in ('paid', 'packing', 'shipping')
                    and s.created_at > now() - interval '{GIVE_UP_DAYS} days'
                    and (s.tracker_webhook_expires_at is null
                         or s.tracker_webhook_expires_at < now() + interval '{RENEW_BEFORE_HOURS} hours')
@@ -217,11 +260,12 @@ async def check_pending(conn: asyncpg.Connection) -> dict[str, int]:
             if await ensure_webhook(conn, row) == "registered":
                 counts["webhook_renewed"] += 1
     rows = await conn.fetch(
-        f"""select s.id, s.carrier_id, s.tracking_number, s.requested_at, s.created_at
+        f"""select s.id, s.carrier_id, s.tracking_number, s.requested_at, s.created_at,
+                   s.started_at, s.delivered_at
               from public.shipments s
               join public.orders o on o.id = s.order_id
              where s.status = 'registered' and s.tracking_number is not null
-               and s.carrier_id is not null and s.started_at is null
+               and s.carrier_id is not null and s.delivered_at is null
                and o.status in ('paid', 'packing', 'shipping')
                and s.created_at > now() - interval '{GIVE_UP_DAYS} days'
                and (s.tracker_checked_at is null

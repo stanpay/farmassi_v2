@@ -58,7 +58,12 @@ async def register_tracking(ctx: FnCtx) -> FnResult:
                           registered_by = $5, requested_at = now(), updated_at = now(),
                           started_at = null, tracker_status = null, tracker_status_name = null,
                           tracker_description = null, tracker_event_at = null,
-                          tracker_checked_at = null, tracker_check_count = 0, tracker_error = null
+                          tracker_checked_at = null, tracker_check_count = 0, tracker_error = null,
+                          tracker_first_event_at = null, started_via = null, started_webhook_at = null,
+                          delivered_at = null, delivered_via = null, delivered_webhook_at = null,
+                          tracker_delivered_event_at = null, tracker_webhook_expires_at = null,
+                          tracker_webhook_error = null, tracker_webhook_tried_at = null,
+                          tracker_webhook_last_at = null
                     where id = $1 returning id""",
                 existing["id"], provider, carrier_id, number, ctx.user_id)
         else:
@@ -77,7 +82,8 @@ async def register_tracking(ctx: FnCtx) -> FnResult:
     webhook = "not_configured"
     if delivery_tracker.configured():
         row = await ctx.admin.fetchrow(
-            """select id, carrier_id, tracking_number, requested_at, created_at
+            """select id, carrier_id, tracking_number, requested_at, created_at,
+                      started_at, delivered_at
                  from public.shipments where id = $1""", shipment_id)
         # 웹훅을 걸고(접수되면 Delivery Tracker 가 알려 줌), 바로 한 번 조회해 본다.
         # 둘 다 덤이다. 실패해도 등록은 이미 저장됐고, 루프가 다시 걸고 다시 본다.
