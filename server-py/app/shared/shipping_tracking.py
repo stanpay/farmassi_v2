@@ -118,10 +118,11 @@ async def check_one(conn: asyncpg.Connection, shipment: Any) -> str:
         """update public.shipments set tracker_checked_at = now(),
                   tracker_check_count = tracker_check_count + 1, tracker_error = null,
                   tracker_status = $2, tracker_status_name = $3, tracker_description = $4,
-                  tracker_event_at = $5::timestamptz
+                  tracker_event_at = $5::timestamptz,
+                  tracker_first_event_at = coalesce(tracker_first_event_at, $6::timestamptz)
             where id = $1""",
         shipment["id"], last.get("code"), last.get("name"), last.get("description"),
-        last.get("time"))
+        last.get("time"), recent[0].get("time") if recent else None)
     if not recent:
         return "waiting"
     await start_shipment(conn, str(shipment["id"]))
