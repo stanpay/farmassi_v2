@@ -6,6 +6,7 @@ export const CARRIERS = [
   { id: 'kr.epost', name: '우체국택배' },
   { id: 'kr.cjlogistics', name: 'CJ대한통운' },
   { id: 'kr.hanjin', name: '한진택배' },
+  { id: 'kr.coupangls', name: '쿠팡' },
 ] as const
 
 export const CARRIER_NAME: Record<string, string> = Object.fromEntries(CARRIERS.map((c) => [c.id, c.name]))
