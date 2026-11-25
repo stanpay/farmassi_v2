@@ -8,11 +8,14 @@
   3. shipments.started_at 을 찍어 다시 처리하지 않는다.
 
 어떤 상태 코드가 우체국 '접수'에 해당하는지 문서에 없어서, 기록이 하나라도 생기면 접수로 본다.
+단 송장번호는 재사용된다(실제 조회에서 남의 옛 배송 기록이 나왔다). 등록 시각 기준
+RECENT_DAYS 일 전부터의 기록만 이번 배송으로 친다.
 키가 만료·오류면(무료 요금제는 21일마다 갱신) 관리자에게 하루 한 번 알린다.
 """
 from __future__ import annotations
 
 import time
+from datetime import datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -23,6 +26,38 @@ from .alimtalk import notify_order
 CHECK_EVERY_MINUTES = 10   # 같은 송장을 다시 볼 간격
 GIVE_UP_DAYS = 14          # 등록 후 이 기간 안에 접수가 안 뜨면 더 보지 않는다
 BATCH = 50
+RECENT_DAYS = 7            # 등록 전 이 기간 안의 기록만 이번 배송으로 본다 (번호 재사용 대비)
+
+
+def _parse_time(value: str | datetime | None) -> datetime | None:
+    # DB 커넥션은 timestamptz 를 문자열로 돌려준다. 문자열·datetime 둘 다 받는다.
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def current_events(info: dict[str, Any] | None,
+                   registered_at: str | datetime | None) -> list[dict[str, Any]]:
+    """이번 배송의 기록만 (등록 RECENT_DAYS 일 전 이후, 시각 없는 기록은 뺀다)."""
+    base = _parse_time(registered_at)
+    if base is None:
+        return []  # 등록 시각을 모르면 판단하지 않는다 (다음 조회에서 다시)
+    since = base - timedelta(days=RECENT_DAYS)
+    events = list((info or {}).get("events") or [])
+    last = (info or {}).get("last")
+    if last and last not in events:
+        events.append(last)
+    out = []
+    for event in events:
+        at = _parse_time(event.get("time"))
+        if at and at >= since:
+            out.append(event)
+    return sorted(out, key=lambda e: _parse_time(e["time"]))
 _AUTH_CODES = {"UNAUTHENTICATED", "FORBIDDEN"}
 _last_auth_alert = 0.0
 
@@ -75,7 +110,10 @@ async def check_one(conn: asyncpg.Connection, shipment: Any) -> str:
             return "auth_error"
         return "error"
 
-    last = (info or {}).get("last") or {}
+    registered_at = shipment["requested_at"] or shipment["created_at"]
+    recent = current_events(info, registered_at)
+    # 화면에 보일 '최근 상태'도 이번 배송 것만. 옛 기록은 남기지 않는다.
+    last = recent[-1] if recent else {}
     await conn.execute(
         """update public.shipments set tracker_checked_at = now(),
                   tracker_check_count = tracker_check_count + 1, tracker_error = null,
@@ -84,7 +122,7 @@ async def check_one(conn: asyncpg.Connection, shipment: Any) -> str:
             where id = $1""",
         shipment["id"], last.get("code"), last.get("name"), last.get("description"),
         last.get("time"))
-    if not info:
+    if not recent:
         return "waiting"
     await start_shipment(conn, str(shipment["id"]))
     return "started"
@@ -96,7 +134,7 @@ async def check_pending(conn: asyncpg.Connection) -> dict[str, int]:
     if not delivery_tracker.configured():
         return counts
     rows = await conn.fetch(
-        f"""select s.id, s.carrier_id, s.tracking_number
+        f"""select s.id, s.carrier_id, s.tracking_number, s.requested_at, s.created_at
               from public.shipments s
               join public.orders o on o.id = s.order_id
              where s.status = 'registered' and s.tracking_number is not null
