@@ -111,6 +111,27 @@ def template_variables(kind: str) -> list[str]:
     return seen
 
 
+def extract_variables(kind: str, message: str | None) -> dict[str, str] | None:
+    """보낸 본문에서 변수 값을 거꾸로 뽑는다 (재전송 미리 채우기). 템플릿과 안 맞으면 None."""
+    if not message:
+        return None
+    content = TEMPLATES[kind]["content"]
+    pattern, groups = "", {}
+    for i, part in enumerate(re.split(r"(#\{[^}]+\})", content)):
+        m = re.fullmatch(r"#\{([^}]+)\}", part)
+        if not m:
+            pattern += re.escape(part)
+        elif m.group(1) in groups.values():
+            pattern += f"(?P={next(g for g, n in groups.items() if n == m.group(1))})"
+        else:
+            groups[f"v{i}"] = m.group(1)
+            pattern += f"(?P<v{i}>.+?)"
+    found = re.fullmatch(pattern, message, re.S)
+    if not found:
+        return None
+    return {name: found.group(g) for g, name in groups.items()}
+
+
 MAX_VARIABLE = 200
 MAX_MESSAGE = 1000  # 알리고 알림톡 본문 한도
 
