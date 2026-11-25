@@ -1,10 +1,9 @@
 // 알림톡 1건이 나가기까지의 시각을 초 단위로 (카카오톡 발송 로그 펼침).
 //
-// 주문 알림톡은 그 주문의 앞 단계를 누적해서 보여 준다.
 // 주문완료: 은행 입금(뱅크다 거래 시각) → 뱅크다에서 가져옴 → 입금완료 처리 → 발송
-// 택배번호: (입금 단계) → 배송시작(택배사 기록 중 가장 이른 것) → 웹훅 수신 → 접수 확인 → 발송
+// 택배번호: 배송시작(택배사 기록 중 가장 이른 것) → 웹훅 수신 → 접수 확인 → 발송
 //          (웹훅이 아니라 조회·등록 직후 조회로 확인했으면 그 경로를 적는다)
-// 배송완료: (입금·접수 단계) → 택배사 배달완료(Delivery Tracker) → 웹훅 수신 → 배송완료 처리 → 발송
+// 배송완료: 웹훅 수신 → 접수 확인 → 택배사 배달완료(Delivery Tracker) → 웹훅 수신 → 배송완료 처리 → 발송
 // 회원가입: 가입 → 연락처 저장(처음) → 발송
 // 공통 발송: 발송 요청(서버→알리고) → 알리고 접수 → 카카오 발송 → 결과 수신 → 리포트 → 대체문자 발송
 
@@ -69,10 +68,13 @@ interface Step {
 function steps(log: TimelineLog, profile?: TimelineProfile | null): Step[] {
   const out: Step[] = []
   const order = log.orders
-  // 주문 알림톡은 그 주문의 앞 단계를 모두 이어서 보여 준다 (입금 → 접수 → 배달완료 → 이 알림톡).
+  // 주문 알림톡이 보여 주는 앞 단계 (11/26 박지훈·사용자 정리):
+  //   주문완료: 은행 입금 · 뱅크다에서 가져옴 · 입금완료 처리
+  //   택배번호: 배송시작 · 웹훅 수신 · 접수 확인          (입금 3줄은 뺀다)
+  //   배송완료: 웹훅 수신 · 접수 확인 · 택배사 배달완료 · 웹훅 수신 · 배송완료 처리  (입금 3줄·배송시작은 뺀다)
   const ORDER_STAGE: Record<string, number> = { order_done: 1, tracking: 2, delivered: 3 }
   const stage = ORDER_STAGE[log.kind] ?? 0
-  if (stage >= 1 && order) {
+  if (stage === 1 && order) {
     const deposits = (order.deposit_transactions ?? []).filter((d) => d.occurred_at)
     const deposit = deposits.sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))[0]
     if (deposit?.occurred_at) {
@@ -90,7 +92,7 @@ function steps(log: TimelineLog, profile?: TimelineProfile | null): Step[] {
   }
   if (stage >= 2 && order) {
     const shipment = (order.shipments ?? []).find((s) => s.status !== 'cancelled' && s.started_at)
-    if (shipment?.tracker_first_event_at) {
+    if (stage === 2 && shipment?.tracker_first_event_at) {
       out.push({
         label: '배송시작',
         note: `택배사 기록 중 가장 이른 것${shipment.tracker_first_event_name ? ` (${shipment.tracker_first_event_name})` : ''}`,
