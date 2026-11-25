@@ -4,21 +4,31 @@ import { AppShell } from '../../components/layout/AppShell'
 import { Header } from '../../components/layout/Header'
 import { FarmFilterChips } from '../../components/shared/FarmFilterChips'
 import { Badge } from '../../components/ui/Badge'
+import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
-import { ErrorText, PageSpinner } from '../../components/ui/Feedback'
+import { PageSpinner } from '../../components/ui/Feedback'
 import { adminNavItems } from '../../config/adminNav'
 import { formatDateTime } from '../../lib/format'
 import { supabase } from '../../lib/supabase'
+import { AlimtalkSendDialog } from './AlimtalkSendDialog'
+import { AlimtalkTimeline, type TimelineLog, type TimelineProfile } from './AlimtalkTimeline'
+import { DeliveryWebhookEvents } from './DeliveryWebhookEvents'
+import { DevTestTools } from './DevTestTools'
+import { useDevTestEnabled } from '../../lib/useDevTestEnabled'
 
 // 알림톡 발송 로그 (관리자). 서버가 1분마다 알리고에 결과를 물어 채운다.
 // 알림톡 실패 사유는 알리고 rslt_message, 대체문자 결과는 sms_list 의 sms_state 그대로다.
 
 type Result = 'pending' | 'alimtalk' | 'sms' | 'failed'
 
-interface LogRow {
+interface LogRow extends Omit<TimelineLog, 'orders'> {
   id: string
   kind: string
   farm_id: string | null
+  order_id: string | null
+  user_id: string | null
+  sent_by: string | null
+  resend_of: string | null
   phone: string | null
   tpl_code: string | null
   result: Result
@@ -32,7 +42,9 @@ interface LogRow {
   checked_at: string | null
   alerted_at: string | null
   farms: { name: string } | null
-  orders: { order_no: string } | null
+  orders: ({ order_no: string } & NonNullable<TimelineLog['orders']>) | null
+  /** 보낼 때 남긴 주문번호 (주문이 지워져도 남는다) */
+  order_no: string | null
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -59,18 +71,49 @@ function maskPhone(phone: string | null) {
 export function AdminAlimtalkLogs() {
   const [rows, setRows] = useState<LogRow[] | null>(null)
   const [error, setError] = useState('')
+  const [failedAt, setFailedAt] = useState<string | null>(null)
   const [farmId, setFarmId] = useState<string | 'all'>('all')
   const [onlyFailed, setOnlyFailed] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
+  // null: 닫힘, 'new': 새로 수동 발송, 그 밖: 재전송할 로그 id
+  const [sending, setSending] = useState<string | null>(null)
+  const [profiles, setProfiles] = useState<Record<string, TimelineProfile>>({})
+  // 알림톡 발송 로그 / 배송 웹훅 수신 기록
+  const [view, setView] = useState<'logs' | 'webhooks'>('logs')
+  const devTestEnabled = useDevTestEnabled()
+  const [testing, setTesting] = useState(false)
 
   async function load() {
     const { data, error: loadError } = await supabase
       .from('alimtalk_logs')
-      .select('*, farms(name), orders(order_no)')
+      .select(
+        '*, farms(name), orders(order_no, paid_at, deposit_confirmed_at, completed_at,' +
+          ' deposit_transactions(occurred_at, created_at, provider),' +
+          ' shipments(status, tracker_first_event_at, tracker_first_event_name, started_at, started_via, started_webhook_at,' +
+          ' delivered_at, delivered_via, delivered_webhook_at, tracker_delivered_event_at))',
+      )
       .order('created_at', { ascending: false })
       .limit(300)
-    if (loadError) setError(loadError.message)
-    setRows((data as LogRow[]) ?? [])
+    // 1분마다 다시 읽는다. 한 번 실패했다고 목록을 비우지 않는다 — 전에 읽은 목록을 두고
+    // 위에 '새로고침 실패'만 알린다. 다음에 성공하면 알림을 지운다 (11/25: 서버 재시작·DB 변경 중
+    // 한 번 실패하면 화면이 비고 새로고침 전까지 돌아오지 않았다).
+    if (loadError) {
+      setError(loadError.message)
+      setFailedAt(new Date().toISOString())
+      setRows((prev) => prev ?? [])
+      return
+    }
+    setError('')
+    setFailedAt(null)
+    const list = (data as LogRow[]) ?? []
+    setRows(list)
+    // 회원가입 알림톡의 시작 시각(가입·연락처 저장)은 회원 정보에 있다. 로그→회원 연결이 둘(받는 회원,
+    // 보낸 관리자)이라 한 번에 붙여 읽지 않고 따로 읽는다.
+    const ids = [...new Set(list.filter((r) => r.kind === 'signup' && r.user_id).map((r) => r.user_id as string))]
+    if (ids.length > 0) {
+      const { data: people } = await supabase.from('profiles').select('id, created_at, phone_first_set_at').in('id', ids)
+      setProfiles(Object.fromEntries(((people ?? []) as ({ id: string } & TimelineProfile)[]).map((p) => [p.id, p])))
+    }
   }
 
   useEffect(() => {
@@ -104,13 +147,46 @@ export function AdminAlimtalkLogs() {
 
   return (
     <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
-      <Header title="카카오톡" subtitle="알림톡 발송 로그" />
+      <Header title="카카오톡" subtitle={view === 'logs' ? '알림톡 발송 로그' : '배송 웹훅 수신 기록'} />
       <div className="px-4 py-4 md:px-6 max-w-3xl mx-auto space-y-4">
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex gap-2">
+            <Button type="button" onClick={() => setSending('new')}>
+              수동 발송
+            </Button>
+            {devTestEnabled && (
+              <Button type="button" variant="outline" onClick={() => setTesting(true)}>
+                시험 도구 (dev)
+              </Button>
+            )}
+          </div>
           <Link to="/admin/kakao/template" className="text-sm text-primary underline">
             템플릿 보기 →
           </Link>
         </div>
+        <div className="flex gap-2" role="tablist" aria-label="기록 종류">
+          {([
+            ['logs', '알림톡 발송'],
+            ['webhooks', '배송 웹훅 수신'],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={view === id}
+              onClick={() => setView(id)}
+              className={`rounded-full px-3 py-1.5 text-sm font-medium ${
+                view === id ? 'bg-primary text-white' : 'border border-gray-200 bg-white text-muted hover:bg-gray-50'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {view === 'webhooks' ? (
+          <DeliveryWebhookEvents />
+        ) : (
+        <>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={onlyFailed} onChange={(e) => setOnlyFailed(e.target.checked)} />
@@ -124,12 +200,24 @@ export function AdminAlimtalkLogs() {
 
         <FarmFilterChips farms={farms} selectedId={farmId} onSelect={setFarmId} allCount={rows?.length ?? 0} />
 
+        {error && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <span>
+              로그를 다시 읽지 못했습니다
+              {failedAt && ` (${new Date(failedAt).toLocaleTimeString('ko-KR', { hour12: false })})`}: {error}.{' '}
+              {rows && rows.length > 0 ? '아래는 직전에 읽은 목록입니다. ' : ''}1분 뒤 다시 시도합니다.
+            </span>
+            <Button type="button" size="sm" variant="outline" onClick={() => void load()}>
+              지금 다시 시도
+            </Button>
+          </div>
+        )}
         {rows === null ? (
           <PageSpinner label="로그 불러오는 중..." />
-        ) : error ? (
-          <ErrorText>{error}</ErrorText>
         ) : visible.length === 0 ? (
-          <p className="text-sm text-muted">{onlyFailed ? '실패한 발송이 없습니다.' : '발송 기록이 없습니다.'}</p>
+          error ? null : (
+            <p className="text-sm text-muted">{onlyFailed ? '실패한 발송이 없습니다.' : '발송 기록이 없습니다.'}</p>
+          )
         ) : (
           visible.map((row) => {
             const result = RESULT_LABEL[row.result] ?? RESULT_LABEL.pending
@@ -145,17 +233,38 @@ export function AdminAlimtalkLogs() {
                     <Badge variant={result.variant}>{result.label}</Badge>
                     <span className="font-bold">{KIND_LABEL[row.kind] ?? row.kind}</span>
                     <span className="text-sm text-muted">{row.farms?.name ?? '농가 없음'}</span>
-                    {row.orders?.order_no && <span className="text-xs text-muted">{row.orders.order_no}</span>}
+                    {row.sent_by && (
+                      <Badge variant="neutral">{row.resend_of ? '재전송' : '수동 발송'}</Badge>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-x-3 text-xs text-muted">
+                    {(row.order_no ?? row.orders?.order_no) && (
+                      <span className="font-medium text-gray-900">주문 {row.order_no ?? row.orders?.order_no}</span>
+                    )}
                     <span>{formatDateTime(row.created_at)}</span>
                     <span>{maskPhone(row.phone)}</span>
                     <span>{row.tpl_code}</span>
                   </div>
                   {row.fail_reason && <p className="text-sm text-red-600">{row.fail_reason}</p>}
                 </button>
+                {/* 실패·문자로 도착 포함 모든 건. 주문·회원이 없는 기록은 처음 보낸 번호로 다시 보낸다. */}
+                {row.phone && (
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant={row.result === 'failed' ? 'primary' : 'ghost'}
+                      onClick={() => setSending(row.id)}
+                    >
+                      재전송
+                    </Button>
+                  </div>
+                )}
                 {expanded && (
                   <dl className="grid grid-cols-[6rem_1fr] gap-x-2 gap-y-1 border-t border-gray-100 pt-2 text-xs">
+                    <dt className="text-muted">시간 (초)</dt>
+                    <dd>
+                      <AlimtalkTimeline log={row} profile={row.user_id ? profiles[row.user_id] : null} />
+                    </dd>
                     <dt className="text-muted">알림톡 결과</dt>
                     <dd>{row.at_rslt ? `${row.at_rslt} · ${row.at_rslt_message ?? ''}` : '아직 없음'}</dd>
                     <dt className="text-muted">대체문자</dt>
@@ -172,7 +281,16 @@ export function AdminAlimtalkLogs() {
             )
           })
         )}
+        </>
+        )}
       </div>
+      <DevTestTools open={testing} onClose={() => setTesting(false)} onChanged={() => void load()} />
+      <AlimtalkSendDialog
+        open={sending !== null}
+        logId={sending && sending !== 'new' ? sending : null}
+        onClose={() => setSending(null)}
+        onSent={() => void load()}
+      />
     </AppShell>
   )
 }

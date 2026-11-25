@@ -5,18 +5,25 @@ Node 서버(server/)를 옮기는 중이다. 두 서버가 동시에 떠 있어�
 경로별로 nginx 에서 넘긴다. 응답 형태는 Node 쪽과 같아야 한다 —
 프론트가 그 형태에 맞춰져 있고 거슬러 올라가면 PostgREST 형식이다.
 """
+import asyncio
+import hmac
 import json
 import os
+import re
+import time
 import traceback
 from contextlib import asynccontextmanager
 
 import base64
 
+import asyncpg
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import db
+from . import chatbot, db
+from .shared import delivery_tracker
+from .shared.shipping_tracking import handle_webhook as handle_delivery_webhook
 from .config import config
 from .jwt_session import sign, verify
 from .functions import FUNCTIONS, FnCtx
@@ -35,6 +42,7 @@ async def lifespan(_: FastAPI):
     yield
     if task is not None:
         task.cancel()
+    await chatbot.close()
     await db.disconnect()
 
 
@@ -122,9 +130,108 @@ async def auth_me(uid: str | None = Depends(user_id)):
 async def query(request: Request, uid: str | None = Depends(user_id)):
     """데이터 게이트웨이. RLS 가 적용되는 커넥션으로 나간다."""
     body = await request.json()
-    async with db.with_user(uid) as conn:
-        result = await run_query(conn, body)
+    # DB 에 컬럼을 더하는 등 스키마가 바뀌면 커넥션에 캐시된 쿼리 계획이 무효가 되어 첫 요청이
+    # InvalidCachedStatementError 로 실패한다 (asyncpg). 트랜잭션째 버려졌으므로 한 번만 다시 한다.
+    # /query 는 실패하면 트랜잭션이 통째로 되돌려져 다시 해도 안전하다. /rpc 는 외부 호출(알림톡 등)이
+    # 있을 수 있어 다시 하지 않는다.
+    for attempt in (1, 2):
+        try:
+            async with db.with_user(uid) as conn:
+                result = await run_query(conn, body)
+            break
+        except asyncpg.exceptions.InvalidCachedStatementError:
+            if attempt == 2:
+                raise
     return {"data": result.data, "count": result.count, "error": None}
+
+
+# Delivery Tracker 웹훅. 서명이 없어서 주소에 비밀 토큰을 넣고, 받은 내용은 다시 조회해 확인한다.
+# 문서 권장: 1초 안에 202. 받은 시각만 남기고 처리는 뒤에서 한다.
+_webhook_tasks: set[asyncio.Task] = set()
+
+
+async def _process_delivery_webhook(event_id: str) -> None:
+    try:
+        async with db.with_admin() as conn:
+            await handle_delivery_webhook(conn, event_id)
+    except Exception as error:  # noqa: BLE001
+        traceback.print_exc()
+        async with db.with_admin() as conn:
+            await conn.execute(
+                "update public.delivery_webhook_events set outcome = 'error', error = $2,"
+                " processed_at = now() where id = $1", event_id, str(error)[:500])
+
+
+@app.post("/webhooks/delivery-tracker/{token}")
+async def delivery_tracker_webhook(token: str, request: Request):
+    expected = delivery_tracker.webhook_token()
+    if not expected or not hmac.compare_digest(token.encode(), expected.encode()):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    carrier_id = str(body.get("carrierId") or "")[:64]
+    number = re.sub(r"[\s-]", "", str(body.get("trackingNumber") or ""))[:40]
+    async with db.with_admin() as conn:
+        event_id = await conn.fetchval(
+            """insert into public.delivery_webhook_events (carrier_id, tracking_number)
+               values ($1, $2) returning id""", carrier_id, number)
+    task = asyncio.create_task(_process_delivery_webhook(str(event_id)))
+    _webhook_tasks.add(task)
+    task.add_done_callback(_webhook_tasks.discard)
+    return Response(status_code=202)
+
+
+# 카카오 챗봇용 읽기 전용 조회 (doc/chatbot/developer-handoff.md). 프로토타입 — 테스트 채널 전용.
+_CHATBOT_PG_CODES = {"57014": "timeout", "25006": "read_only"}
+
+
+def _chatbot_log(status: str, started: float, sql: str, rows: int | None = None) -> None:
+    # 무엇을 조회했는지 남긴다. 결과 값은 남기지 않는다.
+    ms = int((time.monotonic() - started) * 1000)
+    rows_part = f" rows={rows}" if rows is not None else ""
+    print(f"[chatbot] {status}{rows_part} {ms}ms sql={sql[:2000]!r}", flush=True)
+
+
+@app.post("/chatbot/query")
+async def chatbot_query(request: Request):
+    if not chatbot.enabled():
+        return JSONResponse({"error": {"code": "disabled"}}, status_code=503)
+    if not chatbot.authorized(request.headers.get("x-chatbot-key")):
+        return JSONResponse({"error": {"code": "unauthorized"}}, status_code=401)
+
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": {"code": "bad_request", "message": "본문은 JSON 객체여야 합니다"}},
+                            status_code=400)
+    sql = str(body.get("sql") or "").strip()
+    params = body.get("params") if body.get("params") is not None else []
+    if (not sql or len(sql) > chatbot.MAX_SQL or not isinstance(params, list)
+            or any(not (p is None or isinstance(p, (str, int, float, bool))) for p in params)):
+        return JSONResponse({"error": {"code": "bad_request",
+                                       "message": "sql 은 1~10000자, params 는 문자열·숫자·불리언·null 배열"}},
+                            status_code=400)
+
+    started = time.monotonic()
+    try:
+        result = await chatbot.run(sql, params)
+    except asyncpg.PostgresError as error:
+        code = _CHATBOT_PG_CODES.get(error.sqlstate, "sql_error")
+        _chatbot_log(f"{code} {error.sqlstate}", started, sql)
+        return JSONResponse({"error": {"code": code, "pg_code": error.sqlstate, "message": str(error)}},
+                            status_code=400)
+    except (asyncpg.InterfaceError, asyncpg.exceptions.DataError, TypeError, ValueError) as error:
+        # params 개수·타입이 SQL 과 안 맞을 때
+        _chatbot_log("bad_request", started, sql)
+        return JSONResponse({"error": {"code": "bad_request", "message": str(error)}}, status_code=400)
+    _chatbot_log("ok", started, sql, result["row_count"])
+    return result
 
 
 @app.post("/rpc/{name}")

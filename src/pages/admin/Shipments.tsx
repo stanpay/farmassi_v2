@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { History, PenLine } from 'lucide-react'
+import { ClipboardPen, History, PenLine } from 'lucide-react'
 import { AppShell } from '../../components/layout/AppShell'
 import { Header } from '../../components/layout/Header'
 import { KpostParcelExport } from '../../components/shared/KpostParcelExport'
@@ -9,12 +9,83 @@ import { mergePauseFarms, ShippingPausePanel } from '../../components/shared/Shi
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { adminNavItems } from '../../config/adminNav'
-import { groupOrdersByFarm, toOrderListModel, type OrderRow } from '../../lib/orders'
+import { groupOrdersByFarm, toOrderListModel, unwrapFarm, type OrderRow } from '../../lib/orders'
+import { CARRIER_NAME } from '../../lib/carriers'
+import { formatDateTime } from '../../lib/format'
+import { formatSeconds } from '../../lib/timeFormat'
 import { supabase } from '../../lib/supabase'
 import { pauseCovering, pauseMessage, todayInSeoul, type PauseRange } from '../../lib/deliveryEstimate'
+import type { Shipment } from '../../types/models'
+import { AlimtalkSendDialog } from './AlimtalkSendDialog'
+import type { RecentOrder } from './OrderNoCombobox'
+import { RegisterTrackingDialog } from './RegisterTrackingDialog'
 
 const ORDER_SELECT =
-  '*, order_items(*, product:products(parcel_weight_kg, parcel_volume_cm, parcel_content_code, parcel_delivery_type)), farms(name, slug)'
+  '*, order_items(*, product:products(parcel_weight_kg, parcel_volume_cm, parcel_content_code, parcel_delivery_type)), farms(name, slug), shipments(*)'
+
+/** 주문의 살아 있는 송장 (취소 제외, 최근 것). */
+function liveShipment(order: OrderRow): Shipment | null {
+  const list = (order.shipments ?? []).filter((s) => s.status !== 'cancelled')
+  return list.sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] ?? null
+}
+
+/** 직접 등록한 송장의 추적 상태 한 줄. */
+function TrackingLine({ shipment }: { shipment: Shipment | null }) {
+  if (!shipment?.tracking_number) return null
+  const carrier = (shipment.carrier_id && CARRIER_NAME[shipment.carrier_id]) || shipment.provider
+  const via = shipment.started_via === 'webhook' ? '웹훅' : shipment.started_via === 'poll' ? '조회' : '등록 직후 조회'
+  const state = shipment.started_at
+    ? `접수 확인 ${formatDateTime(shipment.started_at)} (${via}) · 배송시작 알림톡 처리`
+    : shipment.tracker_error
+      ? `조회 오류: ${shipment.tracker_error}`
+      : shipment.status === 'registered'
+        ? '택배사 접수 대기 (접수되면 배송중 + 배송시작 알림톡)'
+        : ''
+  const webhook =
+    shipment.started_at || shipment.status !== 'registered'
+      ? ''
+      : shipment.tracker_webhook_expires_at && new Date(shipment.tracker_webhook_expires_at) > new Date()
+        ? `웹훅 대기 중 (만료 ${formatDateTime(shipment.tracker_webhook_expires_at)}, 자동 연장)` +
+          (shipment.tracker_webhook_last_at ? ` · 마지막 웹훅 수신 ${formatSeconds(shipment.tracker_webhook_last_at)}` : '')
+        : shipment.tracker_webhook_error
+          ? `웹훅 등록 실패: ${shipment.tracker_webhook_error} (조회로 대신 확인)`
+          : '웹훅 없음 (10분마다 조회)'
+  const last = shipment.tracker_status_name || shipment.tracker_description
+  return (
+    <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs">
+      <p className="font-medium">
+        {carrier} {shipment.tracking_number}
+      </p>
+      {shipment.tracker_first_event_at && (
+        <p className="text-muted">
+          배송시작 {formatSeconds(shipment.tracker_first_event_at)}
+          {shipment.tracker_first_event_name ? ` (${shipment.tracker_first_event_name})` : ''}
+        </p>
+      )}
+      {last && (
+        <p className="text-muted">
+          최근: {last}
+          {shipment.tracker_event_at ? ` (${formatDateTime(shipment.tracker_event_at)})` : ''}
+        </p>
+      )}
+      {state && <p className={shipment.tracker_error ? 'text-red-600' : 'text-muted'}>{state}</p>}
+      {webhook && <p className={shipment.tracker_webhook_error ? 'text-amber-700' : 'text-muted'}>{webhook}</p>}
+    </div>
+  )
+}
+
+function toPickable(order: OrderRow): RecentOrder {
+  return {
+    id: order.id,
+    order_no: order.order_no,
+    status: order.status,
+    created_at: order.created_at,
+    sender_name: order.sender_name ?? null,
+    recipient_name: order.recipient_name ?? null,
+    depositor_name: order.depositor_name ?? null,
+    farms: { name: unwrapFarm(order.farms).name },
+  }
+}
 
 export function AdminShipments() {
   const [orders, setOrders] = useState<OrderRow[]>([])
@@ -23,13 +94,16 @@ export function AdminShipments() {
    * 손님이 출고일을 뒤로 미룬 주문은 그날이 될 때까지 섞이면 안 된다.
    * 기본은 '현재' — 지금 접수할 것만 보인다.
    */
-  const [tab, setTab] = useState<'now' | 'later'>('now')
+  const [tab, setTab] = useState<'now' | 'later' | 'shipping'>('now')
+  const [registering, setRegistering] = useState(false)
+  // 배송중 탭의 '알림톡 재전송' 대상 주문
+  const [resendOrderId, setResendOrderId] = useState<string | null>(null)
 
   async function loadOrders() {
     const { data } = await supabase
       .from('orders')
       .select(ORDER_SELECT)
-      .in('status', ['paid', 'packing'])
+      .in('status', ['paid', 'packing', 'shipping'])
       .order('created_at', { ascending: false })
     setOrders((data as OrderRow[]) ?? [])
   }
@@ -53,20 +127,30 @@ export function AdminShipments() {
   }, [])
 
   const today = todayInSeoul()
-  const [nowOrders, laterOrders] = useMemo(() => {
+  const [nowOrders, laterOrders, shippingOrders] = useMemo(() => {
     const now: OrderRow[] = []
     const later: OrderRow[] = []
+    const shipping: OrderRow[] = []
     for (const order of orders) {
+      if (order.status === 'shipping') {
+        shipping.push(order)
+        continue
+      }
       const ship = order.requested_ship_date
       // 고른 출고일이 아직 오지 않았으면 대기로 뺀다. 고르지 않았으면 지금 것이다.
       if (ship && ship > today) later.push(order)
       else now.push(order)
     }
-    return [now, later]
+    return [now, later, shipping]
   }, [orders, today])
+  // 직접 등록할 수 있는 주문 (최신순). 배송중은 번호 정정용.
+  const pickable = useMemo(
+    () => [...orders].sort((a, b) => b.created_at.localeCompare(a.created_at)).map(toPickable),
+    [orders],
+  )
 
   const groups = useMemo(
-    () => groupOrdersByFarm(tab === 'now' ? nowOrders : laterOrders),
+    () => (tab === 'shipping' ? [] : groupOrdersByFarm(tab === 'now' ? nowOrders : laterOrders)),
     [nowOrders, laterOrders, tab],
   )
   const pauseFarms = useMemo(
@@ -97,10 +181,11 @@ export function AdminShipments() {
         }
       />
       <div className="px-4 py-4 md:px-6 max-w-5xl mx-auto space-y-4">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {([
             ['now', '전체', nowOrders.length],
             ['later', '송장 접수 대기', laterOrders.length],
+            ['shipping', '배송중', shippingOrders.length],
           ] as const).map(([id, label, count]) => (
             <button
               key={id}
@@ -115,13 +200,22 @@ export function AdminShipments() {
               {label} ({count})
             </button>
           ))}
+          <Button size="sm" className="ml-auto" onClick={() => setRegistering(true)}>
+            <ClipboardPen className="h-4 w-4" />
+            직접 등록
+          </Button>
         </div>
         {tab === 'later' && (
           <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             손님이 출고일을 뒤로 미뤄 둔 주문입니다. 그날이 되면 &apos;전체&apos; 로 넘어옵니다.
           </p>
         )}
-        <ShippingPausePanel farmSelect farms={pauseFarms} />
+        {tab === 'shipping' && (
+          <p className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-muted">
+            택배사 접수가 확인돼 배송시작 알림톡이 나간 주문입니다. 알림톡을 다시 보내려면 &apos;알림톡 재전송&apos;을 누르세요.
+          </p>
+        )}
+        {tab !== 'shipping' && <ShippingPausePanel farmSelect farms={pauseFarms} />}
         {groups.map((group) => (
           <div key={group.farmId} className="space-y-3">
             <Card className="flex flex-wrap items-center justify-between gap-3">
@@ -142,12 +236,54 @@ export function AdminShipments() {
               />
             </Card>
             {group.orders.map((order) => (
-              <OrderItem key={order.id} order={toOrderListModel(order)} />
+              <OrderItem
+                key={order.id}
+                order={toOrderListModel(order)}
+                extra={<TrackingLine shipment={liveShipment(order)} />}
+              />
             ))}
           </div>
         ))}
-        {orders.length === 0 && <p className="text-center text-muted py-8">출고 대기 주문이 없습니다</p>}
+        {tab === 'shipping' &&
+          [...shippingOrders]
+            .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+            .map((order) => (
+              <OrderItem
+                key={order.id}
+                order={toOrderListModel(order)}
+                extra={
+                  <>
+                    <TrackingLine shipment={liveShipment(order)} />
+                    <div className="mt-2 flex justify-end">
+                      <Button size="sm" variant="outline" onClick={() => setResendOrderId(order.id)}>
+                        알림톡 재전송
+                      </Button>
+                    </div>
+                  </>
+                }
+              />
+            ))}
+        {tab === 'shipping' && shippingOrders.length === 0 && (
+          <p className="text-center text-muted py-8">배송중인 주문이 없습니다</p>
+        )}
+        {tab !== 'shipping' && groups.length === 0 && (
+          <p className="text-center text-muted py-8">출고 대기 주문이 없습니다</p>
+        )}
       </div>
+      <RegisterTrackingDialog
+        open={registering}
+        orders={pickable}
+        onClose={() => setRegistering(false)}
+        onSaved={() => void loadOrders()}
+      />
+      <AlimtalkSendDialog
+        open={resendOrderId !== null}
+        logId={null}
+        initialKind="tracking"
+        initialOrderId={resendOrderId ?? undefined}
+        onClose={() => setResendOrderId(null)}
+        onSent={() => void loadOrders()}
+      />
     </AppShell>
   )
 }

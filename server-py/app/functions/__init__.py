@@ -1,5 +1,7 @@
 """Edge Function 대체. 이름은 원래 것을 그대로 유지한다 — 프론트 호출부를 고치지 않기 위해서."""
 from .aligo_templates import aligo_templates
+from .dev_test import dev_test
+from .alimtalk_manual import alimtalk_manual
 from .approve_farm import approve_farm
 from .bankda_account_status import bankda_account_status
 from .bankda_ott import bankda_ott
@@ -14,6 +16,7 @@ from .epost_address import epost_address
 from .juso_building import juso_building
 from .naver_address import naver_address
 from .notify_alimtalk import notify_alimtalk
+from .register_tracking import register_tracking
 from .parse_order_messages import parse_order_messages
 from .scrape_deposits import scrape_deposits
 from .send_push import send_push_fn
@@ -21,6 +24,8 @@ from .types import FnCtx, FnHandler, FnResult, fail, ok
 
 FUNCTIONS: dict[str, FnHandler] = {
     "aligo-templates": aligo_templates,
+    "dev-test": dev_test,
+    "alimtalk-manual": alimtalk_manual,
     "approve-farm": approve_farm,
     "bankda-account-status": bankda_account_status,
     "bankda-ott": bankda_ott,
@@ -35,6 +40,7 @@ FUNCTIONS: dict[str, FnHandler] = {
     "match-farm-products": match_farm_products,
     "naver-address": naver_address,
     "notify-alimtalk": notify_alimtalk,
+    "register-tracking": register_tracking,
     "parse-order-messages": parse_order_messages,
     "scrape-deposits": scrape_deposits,
     "send-push": send_push_fn,
