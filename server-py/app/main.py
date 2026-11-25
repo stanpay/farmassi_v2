@@ -97,7 +97,8 @@ async def on_error(_: Request, exc: Exception):
     return JSONResponse({"error": str(exc)}, status_code=400)
 
 
-@app.get("/health")
+# 상태 점검. 업타임 감시 도구가 HEAD 로 확인하는 경우가 있어 GET·HEAD 둘 다 받는다.
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     return {"ok": True}
 
