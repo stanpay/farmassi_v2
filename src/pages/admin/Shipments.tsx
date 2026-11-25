@@ -32,13 +32,22 @@ function liveShipment(order: OrderRow): Shipment | null {
 function TrackingLine({ shipment }: { shipment: Shipment | null }) {
   if (!shipment?.tracking_number) return null
   const carrier = (shipment.carrier_id && CARRIER_NAME[shipment.carrier_id]) || shipment.provider
+  const via = shipment.started_via === 'webhook' ? '웹훅' : shipment.started_via === 'poll' ? '조회' : '등록 직후 조회'
   const state = shipment.started_at
-    ? `접수 확인 ${formatDateTime(shipment.started_at)} · 배송시작 알림톡 처리`
+    ? `접수 확인 ${formatDateTime(shipment.started_at)} (${via}) · 배송시작 알림톡 처리`
     : shipment.tracker_error
       ? `조회 오류: ${shipment.tracker_error}`
       : shipment.status === 'registered'
         ? '택배사 접수 대기 (접수되면 배송중 + 배송시작 알림톡)'
         : ''
+  const webhook =
+    shipment.started_at || shipment.status !== 'registered'
+      ? ''
+      : shipment.tracker_webhook_expires_at && new Date(shipment.tracker_webhook_expires_at) > new Date()
+        ? `웹훅 대기 중 (만료 ${formatDateTime(shipment.tracker_webhook_expires_at)}, 자동 연장)`
+        : shipment.tracker_webhook_error
+          ? `웹훅 등록 실패: ${shipment.tracker_webhook_error} (조회로 대신 확인)`
+          : '웹훅 없음 (10분마다 조회)'
   const last = shipment.tracker_status_name || shipment.tracker_description
   return (
     <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs">
@@ -52,6 +61,7 @@ function TrackingLine({ shipment }: { shipment: Shipment | null }) {
         </p>
       )}
       {state && <p className={shipment.tracker_error ? 'text-red-600' : 'text-muted'}>{state}</p>}
+      {webhook && <p className={shipment.tracker_webhook_error ? 'text-amber-700' : 'text-muted'}>{webhook}</p>}
     </div>
   )
 }
