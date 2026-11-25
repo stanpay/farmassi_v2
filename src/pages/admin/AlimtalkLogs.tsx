@@ -4,11 +4,13 @@ import { AppShell } from '../../components/layout/AppShell'
 import { Header } from '../../components/layout/Header'
 import { FarmFilterChips } from '../../components/shared/FarmFilterChips'
 import { Badge } from '../../components/ui/Badge'
+import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { ErrorText, PageSpinner } from '../../components/ui/Feedback'
 import { adminNavItems } from '../../config/adminNav'
 import { formatDateTime } from '../../lib/format'
 import { supabase } from '../../lib/supabase'
+import { AlimtalkSendDialog } from './AlimtalkSendDialog'
 
 // 알림톡 발송 로그 (관리자). 서버가 1분마다 알리고에 결과를 물어 채운다.
 // 알림톡 실패 사유는 알리고 rslt_message, 대체문자 결과는 sms_list 의 sms_state 그대로다.
@@ -19,6 +21,10 @@ interface LogRow {
   id: string
   kind: string
   farm_id: string | null
+  order_id: string | null
+  user_id: string | null
+  sent_by: string | null
+  resend_of: string | null
   phone: string | null
   tpl_code: string | null
   result: Result
@@ -51,6 +57,12 @@ const RESULT_LABEL: Record<Result, { label: string; variant: 'primary' | 'accent
 
 const NO_FARM = 'none'
 
+/** 재전송은 받는 사람을 다시 찾을 수 있을 때만 (주문 알림은 주문, 회원가입은 회원). */
+function resendBlocked(row: LogRow) {
+  if (row.kind === 'signup') return row.user_id ? null : '회원 정보가 없는 시험 발송이라 재전송할 수 없습니다.'
+  return row.order_id ? null : '주문이 없는 시험 발송이라 재전송할 수 없습니다.'
+}
+
 function maskPhone(phone: string | null) {
   if (!phone) return '번호 없음'
   return phone.length >= 10 ? `${phone.slice(0, 3)}-****-${phone.slice(-4)}` : phone
@@ -62,6 +74,8 @@ export function AdminAlimtalkLogs() {
   const [farmId, setFarmId] = useState<string | 'all'>('all')
   const [onlyFailed, setOnlyFailed] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
+  // null: 닫힘, 'new': 새로 수동 발송, 그 밖: 재전송할 로그 id
+  const [sending, setSending] = useState<string | null>(null)
 
   async function load() {
     const { data, error: loadError } = await supabase
@@ -106,7 +120,10 @@ export function AdminAlimtalkLogs() {
     <AppShell navItems={adminNavItems} roleLabel="관리자" settingsPath="/admin/none">
       <Header title="카카오톡" subtitle="알림톡 발송 로그" />
       <div className="px-4 py-4 md:px-6 max-w-3xl mx-auto space-y-4">
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between gap-2">
+          <Button type="button" onClick={() => setSending('new')}>
+            수동 발송
+          </Button>
           <Link to="/admin/kakao/template" className="text-sm text-primary underline">
             템플릿 보기 →
           </Link>
@@ -146,6 +163,9 @@ export function AdminAlimtalkLogs() {
                     <span className="font-bold">{KIND_LABEL[row.kind] ?? row.kind}</span>
                     <span className="text-sm text-muted">{row.farms?.name ?? '농가 없음'}</span>
                     {row.orders?.order_no && <span className="text-xs text-muted">{row.orders.order_no}</span>}
+                    {row.sent_by && (
+                      <Badge variant="neutral">{row.resend_of ? '재전송' : '수동 발송'}</Badge>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-x-3 text-xs text-muted">
                     <span>{formatDateTime(row.created_at)}</span>
@@ -154,6 +174,15 @@ export function AdminAlimtalkLogs() {
                   </div>
                   {row.fail_reason && <p className="text-sm text-red-600">{row.fail_reason}</p>}
                 </button>
+                <div className="flex justify-end">
+                  {resendBlocked(row) ? (
+                    expanded && <span className="text-xs text-muted">{resendBlocked(row)}</span>
+                  ) : (
+                    <Button type="button" variant="ghost" onClick={() => setSending(row.id)}>
+                      재전송
+                    </Button>
+                  )}
+                </div>
                 {expanded && (
                   <dl className="grid grid-cols-[6rem_1fr] gap-x-2 gap-y-1 border-t border-gray-100 pt-2 text-xs">
                     <dt className="text-muted">알림톡 결과</dt>
@@ -173,6 +202,12 @@ export function AdminAlimtalkLogs() {
           })
         )}
       </div>
+      <AlimtalkSendDialog
+        open={sending !== null}
+        logId={sending && sending !== 'new' ? sending : null}
+        onClose={() => setSending(null)}
+        onSent={() => void load()}
+      />
     </AppShell>
   )
 }
