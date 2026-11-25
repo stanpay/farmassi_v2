@@ -88,7 +88,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
     },
 }
 
-COURIER_NAMES = {"kpost": "우체국택배", "cj": "CJ대한통운"}
+COURIER_NAMES = {"kpost": "우체국택배", "cj": "CJ대한통운", "hanjin": "한진택배"}
 
 _VAR = re.compile(r"#\{([^}]+)\}")
 

@@ -65,79 +65,92 @@ async def scrape_deposits(ctx: FnCtx) -> FnResult:
     inserted = matched = 0
 
     for row in deposits:
-        amount = int(row.get("bkinput") or 0)
-        farm = farm_by_account.get(re.sub(r"\D", "", str(row.get("accountnum") or "")))
-        farm_id = farm["id"] if farm else None
-        depositor_name = (row.get("bkjukyo") or "").strip() or None
-
-        existing = (await db.from_("deposit_transactions").select("id")
-                    .eq("provider", PROVIDER).eq("external_id", row["bkcode"])
-                    .maybe_single()).data
-        if existing:
+        outcome = await process_bankda_row(ctx.admin, db, row, farm_by_account)
+        if outcome.get("skip"):
             continue
-
-        candidates = []
-        if farm_id:
-            candidates = (await db.from_("orders")
-                          .select("id, deposit_due_amount, deposit_code, recipient_name, depositor_name")
-                          .eq("farm_id", farm_id).eq("status", "pending_deposit")).data or []
-
-        match = match_deposit(amount, depositor_name, candidates)
-
-        insert = await db.from_("deposit_transactions").insert({
-            "farm_id": farm_id,
-            "provider": PROVIDER,
-            "external_id": row["bkcode"],
-            "occurred_at": to_iso_at(row["bkdate"], row["bktime"]),
-            "amount": amount,
-            "depositor_name": depositor_name,
-            "raw_payload": {"source": "bankda", "match_reason": match.reason, "row": row},
-            "matched_order_id": match.order_id,
-            "match_status": "matched" if match.order_id else "unmatched",
-        })
-        if insert.error:
-            results.append({"bkcode": row["bkcode"], "skipped": insert.error["message"]})
-            continue
-        inserted += 1
-
-        matched_order_no = None
-        if match.order_id:
-            # 사람이 먼저 확인한 주문은 덮어쓰지 않는다.
-            updated = (await db.from_("orders").update({
-                "status": "paid",
-                "deposit_confirmed_at": now_iso(),
-                "deposit_provider": PROVIDER,
-            }).eq("id", match.order_id).eq("status", "pending_deposit")
-                .select("id, order_no, farm_id")).data or []
-
-            order = updated[0] if updated else None
-            if order:
-                matched += 1
-                matched_order_no = order["order_no"]
-                await notify_farm_members(
-                    ctx.admin, farm_id=order["farm_id"], order_id=order["id"],
-                    type_="deposit_confirmed", title="입금 확인됨, 출고 준비",
-                    body=f"{order['order_no']} 입금이 확인되었습니다. 포장을 시작해주세요.")
-                await notify_order_done(ctx.admin, order["id"])
-
-        # 새로 들어온 입금 1건마다 메일 1통.
-        # 이미 넣은 거래는 위에서 걸러졌으므로 중복 발송되지 않는다.
-        mailed = await send_deposit_mail(
-            amount=amount, depositor_name=depositor_name,
-            occurred_at=to_iso_at(row["bkdate"], row["bktime"]),
-            account_number=str(row.get("accountnum") or ""),
-            bank_name=str(row.get("bkname") or ""),
-            matched=bool(matched_order_no), order_no=matched_order_no,
-            farm_name=farm["name"] if farm else None, reason=match.reason)
-
-        results.append({
-            "bkcode": row["bkcode"], "amount": amount, "depositorName": depositor_name,
-            "farmId": farm_id, "mailed": mailed, "reason": match.reason,
-            "matchedOrderId": match.order_id, "candidates": len(match.candidate_ids),
-        })
+        if outcome.get("inserted"):
+            inserted += 1
+        if outcome.get("matched"):
+            matched += 1
+        results.append(outcome["result"])
 
     return ok({"fetched": len(rows), "deposits": len(deposits), "inserted": inserted,
                "matched": matched, "rematched": rematched, "results": results})
+
+
+async def process_bankda_row(admin, db: Sb, row: dict, farm_by_account: dict) -> dict:
+    """뱅크다 거래 1건을 넣고 대사한다 (입금완료·농가 알림·주문완료 알림톡·입금 메일).
+
+    돌려주는 값: {"skip": True}(이미 넣은 거래) 또는 {"inserted", "matched", "result"}.
+    dev 시험 입금(dev-test)도 이 함수를 그대로 쓴다 — 뱅크다 조회만 빼고 같은 길을 탄다.
+    """
+    amount = int(row.get("bkinput") or 0)
+    farm = farm_by_account.get(re.sub(r"\D", "", str(row.get("accountnum") or "")))
+    farm_id = farm["id"] if farm else None
+    depositor_name = (row.get("bkjukyo") or "").strip() or None
+
+    existing = (await db.from_("deposit_transactions").select("id")
+                .eq("provider", PROVIDER).eq("external_id", row["bkcode"])
+                .maybe_single()).data
+    if existing:
+        return {"skip": True}
+
+    candidates = []
+    if farm_id:
+        candidates = (await db.from_("orders")
+                      .select("id, deposit_due_amount, deposit_code, recipient_name, depositor_name")
+                      .eq("farm_id", farm_id).eq("status", "pending_deposit")).data or []
+
+    match = match_deposit(amount, depositor_name, candidates)
+
+    insert = await db.from_("deposit_transactions").insert({
+        "farm_id": farm_id,
+        "provider": PROVIDER,
+        "external_id": row["bkcode"],
+        "occurred_at": to_iso_at(row["bkdate"], row["bktime"]),
+        "amount": amount,
+        "depositor_name": depositor_name,
+        "raw_payload": {"source": "bankda", "match_reason": match.reason, "row": row},
+        "matched_order_id": match.order_id,
+        "match_status": "matched" if match.order_id else "unmatched",
+    })
+    if insert.error:
+        return {"result": {"bkcode": row["bkcode"], "skipped": insert.error["message"]}}
+
+    matched_order_no = None
+    if match.order_id:
+        # 사람이 먼저 확인한 주문은 덮어쓰지 않는다.
+        updated = (await db.from_("orders").update({
+            "status": "paid",
+            "deposit_confirmed_at": now_iso(),
+            "deposit_provider": PROVIDER,
+        }).eq("id", match.order_id).eq("status", "pending_deposit")
+            .select("id, order_no, farm_id")).data or []
+
+        order = updated[0] if updated else None
+        if order:
+            matched_order_no = order["order_no"]
+            await notify_farm_members(
+                admin, farm_id=order["farm_id"], order_id=order["id"],
+                type_="deposit_confirmed", title="입금 확인됨, 출고 준비",
+                body=f"{order['order_no']} 입금이 확인되었습니다. 포장을 시작해주세요.")
+            await notify_order_done(admin, order["id"])
+
+    # 새로 들어온 입금 1건마다 메일 1통.
+    # 이미 넣은 거래는 위에서 걸러졌으므로 중복 발송되지 않는다.
+    mailed = await send_deposit_mail(
+        amount=amount, depositor_name=depositor_name,
+        occurred_at=to_iso_at(row["bkdate"], row["bktime"]),
+        account_number=str(row.get("accountnum") or ""),
+        bank_name=str(row.get("bkname") or ""),
+        matched=bool(matched_order_no), order_no=matched_order_no,
+        farm_name=farm["name"] if farm else None, reason=match.reason)
+
+    return {"inserted": True, "matched": bool(matched_order_no), "result": {
+        "bkcode": row["bkcode"], "amount": amount, "depositorName": depositor_name,
+        "farmId": farm_id, "mailed": mailed, "reason": match.reason,
+        "matchedOrderId": match.order_id, "candidates": len(match.candidate_ids),
+    }}
 
 
 async def _rematch_unmatched(db: Sb, admin) -> int:
