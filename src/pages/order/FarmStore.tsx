@@ -20,6 +20,7 @@ import {
   type TodayQty,
 } from '../../lib/qtyLimits'
 import { useAuth } from '../../lib/auth'
+import { kakaoPixelTrack } from '../../lib/kakaoPixel'
 import { supabase } from '../../lib/supabase'
 import { isProductOrderable, type Farm, type Product } from '../../types/models'
 
@@ -92,6 +93,7 @@ export function FarmStore() {
   }
 
   function goCheckout() {
+    kakaoPixelTrack('cta_order_store')
     const path = `/farm/${farmSlug}/checkout`
     if (user) navigate(path)
     else openLogin({ next: path })

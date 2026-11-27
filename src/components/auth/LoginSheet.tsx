@@ -11,6 +11,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { ErrorText } from '../ui/Feedback'
 import { useAuth } from '../../lib/auth'
+import { kakaoPixelLogin, kakaoPixelTrack } from '../../lib/kakaoPixel'
 import { KakaoLoginButton } from './KakaoLoginButton'
 
 interface OpenLoginOptions {
@@ -113,6 +114,8 @@ export function LoginSheetProvider({ children }: { children: ReactNode }) {
                   <KakaoLoginButton
                     disabled={pending}
                     onClick={() => {
+                      kakaoPixelTrack('cta_kakao_login')
+                      kakaoPixelLogin('cta_kakao_login')
                       setError('')
                       setPending(true)
                       void signInWithKakao(next).catch((err) => {

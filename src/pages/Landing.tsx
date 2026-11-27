@@ -10,6 +10,7 @@ import { PageSpinner } from '../components/ui/Feedback'
 import { BRAND } from '../config/brand'
 import { useAuth } from '../lib/auth'
 import { farmDisplayLocation } from '../lib/format'
+import { kakaoPixelTrack } from '../lib/kakaoPixel'
 import { supabase } from '../lib/supabase'
 import type { Farm } from '../types/models'
 
@@ -120,7 +121,10 @@ export function Landing() {
                   {farm.product_summary && (
                     <p className="mt-1 text-sm text-gray-700">{farm.product_summary}</p>
                   )}
-                  <Link to={`/farm/${farm.slug}/landingpage`}>
+                  <Link
+                    to={`/farm/${farm.slug}/landingpage`}
+                    onClick={() => kakaoPixelTrack('cta_view_farm')}
+                  >
                     <Button className="mt-4" fullWidth>
                       보러가기
                     </Button>

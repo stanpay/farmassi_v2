@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { CheckCircle2 } from 'lucide-react'
 import { Header } from '../../components/layout/Header'
@@ -8,6 +8,7 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { PageSpinner } from '../../components/ui/Feedback'
 import { formatPrice } from '../../lib/format'
+import { kakaoPixelPurchase } from '../../lib/kakaoPixel'
 import { supabase } from '../../lib/supabase'
 import type { Farm, Order, OrderItem } from '../../types/models'
 
@@ -17,6 +18,7 @@ export function OrderComplete() {
   const { orderId = '' } = useParams()
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const purchaseSentFor = useRef<string | null>(null)
 
   useEffect(() => {
     supabase
@@ -27,10 +29,26 @@ export function OrderComplete() {
       .then(({ data }) => {
         const row = data as (Order & { order_items: OrderItem[]; farms: Farm | Farm[] | null }) | null
         if (row) {
-          setOrder({
+          const normalized = {
             ...row,
             farms: Array.isArray(row.farms) ? row.farms[0] ?? null : row.farms,
-          })
+          }
+          setOrder(normalized)
+          if (purchaseSentFor.current !== orderId) {
+            purchaseSentFor.current = orderId
+            const qty = normalized.order_items.reduce((sum, item) => sum + (item.quantity || 0), 0)
+            kakaoPixelPurchase({
+              total_quantity: String(qty),
+              total_price: String(normalized.total_amount ?? 0),
+              currency: 'KRW',
+              products: normalized.order_items.map((item) => ({
+                id: item.product_id ?? undefined,
+                name: item.product_name,
+                quantity: item.quantity,
+                price: item.line_amount,
+              })),
+            })
+          }
         }
         setLoading(false)
       })

@@ -1,6 +1,7 @@
 import { Phone } from 'lucide-react'
-import { kakaoChannelChatHref, kakaoChannelHref, safeHttpUrl } from '../../lib/format'
 import { telHref } from '../../lib/farmShareText'
+import { kakaoChannelChatHref, kakaoChannelHref, safeHttpUrl } from '../../lib/format'
+import { kakaoPixelTrack } from '../../lib/kakaoPixel'
 
 interface KakaoChannelButtonProps {
   href: string
@@ -20,6 +21,7 @@ export function KakaoChannelButton({ href, label = '카카오톡 문의' }: Kaka
       target="_blank"
       rel="noopener noreferrer"
       className={`${inquiryBtnClass} bg-[#FEE500] text-black/85 hover:bg-[#F5DC00]`}
+      onClick={() => kakaoPixelTrack('cta_kakao_inquiry')}
     >
       <span className="flex size-[18px] shrink-0 items-center justify-center">
         <KakaoSymbol />
