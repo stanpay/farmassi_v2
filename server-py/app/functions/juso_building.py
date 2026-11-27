@@ -129,6 +129,11 @@ async def _lookup(road: str, dong: str) -> dict:
         }
 
 
+async def lookup_building(address: str, dong: str) -> dict:
+    """주문 검수(review-farm-orders)용 — juso-building 과 같은 응답."""
+    return await _lookup(_road_base(address), dong.strip())
+
+
 async def juso_building(ctx: FnCtx) -> FnResult:
     if not ctx.user_id:
         return fail("로그인이 필요합니다.", 401)

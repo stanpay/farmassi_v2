@@ -234,6 +234,55 @@ async def chatbot_query(request: Request):
     return result
 
 
+# 챗봇이 농가 회원 대신 부르는 RPC. 카카오 appUserId 로 회원을 찾고, 그 회원 권한으로 /rpc 와 똑같이 실행한다.
+# 연결된 회원이 없으면 아예 부르지 않는다. 키를 가진 쪽(챗봇)이 카카오가 준 appUserId 를 그대로 넘긴다는 전제다.
+CHATBOT_RPC = ("review-farm-orders", "create-farm-orders")
+
+
+@app.post("/chatbot/rpc/{name}")
+async def chatbot_rpc(name: str, request: Request):
+    if not chatbot.key_configured():
+        return JSONResponse({"error": "챗봇 API 가 꺼져 있습니다.", "code": "disabled"}, status_code=503)
+    if not chatbot.authorized(request.headers.get("x-chatbot-key")):
+        return JSONResponse({"error": "키가 맞지 않습니다.", "code": "unauthorized"}, status_code=401)
+    if name not in CHATBOT_RPC:
+        return JSONResponse({"error": f"챗봇이 부를 수 없는 함수: {name}", "code": "not_found"}, status_code=404)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "본문은 JSON 객체여야 합니다.", "code": "bad_request"}, status_code=400)
+    kakao_id = str(body.pop("kakaoUserId", "") or "").strip()
+    body.pop("__byCron", None)
+    if not kakao_id:
+        return JSONResponse({"error": "kakaoUserId(카카오 appUserId)가 필요합니다.", "code": "bad_request"},
+                            status_code=400)
+
+    started = time.monotonic()
+    async with db.with_admin() as conn:
+        uid = await conn.fetchval(
+            """select user_id::text from auth.identities
+                where provider = 'kakao' and provider_user_id = $1 limit 1""", kakao_id)
+        if not uid:
+            print(f"[chatbot-rpc] {name} not_linked", flush=True)
+            return JSONResponse({"error": "이 카카오 계정과 연결된 farmassi 회원이 없습니다. 먼저 카카오로 로그인해 주세요.",
+                                 "code": "not_linked"}, status_code=403)
+        if not str(body.get("farmId") or "").strip():
+            farms = [dict(r) for r in await conn.fetch(
+                """select f.id::text as id, f.name from public.farm_members m
+                     join public.farms f on f.id = m.farm_id where m.user_id = $1 order by f.name""", uid)]
+            if len(farms) != 1:
+                return JSONResponse({"error": "어느 농가 주문인지 farmId 를 보내 주세요." if farms
+                                     else "이 회원은 연결된 농가가 없습니다.",
+                                     "code": "farm_required" if farms else "no_farm", "farms": farms},
+                                    status_code=400 if farms else 403)
+            body["farmId"] = farms[0]["id"]
+        result = await FUNCTIONS[name](FnCtx(user_id=uid, body=body, admin=conn))
+    print(f"[chatbot-rpc] {name} {result.status} {int((time.monotonic() - started) * 1000)}ms", flush=True)
+    return JSONResponse(result.body, status_code=result.status)
+
+
 @app.post("/rpc/{name}")
 async def rpc(name: str, request: Request, uid: str | None = Depends(user_id)):
     """Edge Function 대체. 이름은 그대로 유지한다."""

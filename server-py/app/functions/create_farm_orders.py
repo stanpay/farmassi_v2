@@ -10,6 +10,8 @@
 
 금액은 create-order 와 같이 프론트 값을 믿지 않고 DB 의 상품가·배송비 구간표로 다시 계산한다.
 """
+import re
+
 from ..sb import sb
 from ..shared.shipping_fee import fee_for
 from ..shared.util import is_admin, is_farm_member, random_code, seoul_date_compact
@@ -100,6 +102,9 @@ async def _insert_one(db, farm_id: str, order, index: int, by_id: dict,
     address = _text(recipient.get("address"))
     if not (name and phone and address):
         raise _Invalid(f"{index}번 주문에 받는 분 이름·연락처·주소가 모두 있어야 합니다.")
+    # 우체국으로 확정한 주소만 받는다 (확정하면 5자리 우편번호가 붙는다). 화면·챗봇 검수를 건너뛴 요청을 막는다.
+    if not re.fullmatch(r"\d{5}", _text(recipient.get("zonecode"))):
+        raise _Invalid(f"{index}번 주문 주소가 확정되지 않았습니다. 우체국 검색으로 주소를 골라 주세요.")
 
     items = order.get("items") or []
     if not isinstance(items, list) or not items:

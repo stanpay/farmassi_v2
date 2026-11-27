@@ -94,6 +94,11 @@ async def _search(query: str, count_per_page: int, current_page: int) -> list[di
         return _parse_results(response.text)
 
 
+async def search_epost_addresses(query: str) -> list[dict]:
+    """주문 검수(review-farm-orders)용 — 화면과 같이 한 번에 20건."""
+    return await _search(query, 20, 1)
+
+
 async def epost_address(ctx: FnCtx) -> FnResult:
     if not ctx.user_id:
         return fail("로그인이 필요합니다.", 401)
