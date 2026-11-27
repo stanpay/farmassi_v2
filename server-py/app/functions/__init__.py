@@ -17,6 +17,7 @@ from .juso_building import juso_building
 from .naver_address import naver_address
 from .notify_alimtalk import notify_alimtalk
 from .register_tracking import register_tracking
+from .review_farm_orders import review_farm_orders
 from .parse_order_messages import parse_order_messages
 from .scrape_deposits import scrape_deposits
 from .send_push import send_push_fn
@@ -41,6 +42,7 @@ FUNCTIONS: dict[str, FnHandler] = {
     "naver-address": naver_address,
     "notify-alimtalk": notify_alimtalk,
     "register-tracking": register_tracking,
+    "review-farm-orders": review_farm_orders,
     "parse-order-messages": parse_order_messages,
     "scrape-deposits": scrape_deposits,
     "send-push": send_push_fn,

@@ -31,6 +31,11 @@ def _key() -> str:
     return (os.environ.get("CHATBOT_API_KEY") or "").strip()
 
 
+def key_configured() -> bool:
+    """/chatbot/rpc 는 키만 있으면 된다 (조회용 DB 접속은 /chatbot/query 만 쓴다)."""
+    return bool(_key())
+
+
 def enabled() -> bool:
     return bool(_key() and (os.environ.get("CHATBOT_DATABASE_URL") or "").strip())
 
