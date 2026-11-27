@@ -10,6 +10,7 @@ import { Card } from '../../components/ui/Card'
 import { PageSpinner } from '../../components/ui/Feedback'
 import { useAuth } from '../../lib/auth'
 import { farmDisplayLocation } from '../../lib/format'
+import { kakaoPixelTrack } from '../../lib/kakaoPixel'
 import { supabase } from '../../lib/supabase'
 import { parseLandingBlocks, type Farm } from '../../types/models'
 
@@ -123,7 +124,11 @@ export function FarmLanding() {
             mobilePhone={farm.mobile_phone}
           />
           {farm.is_active ? (
-            <Link to={`/farm/${farm.slug}`} className="block">
+            <Link
+              to={`/farm/${farm.slug}`}
+              className="block"
+              onClick={() => kakaoPixelTrack('cta_order_landing')}
+            >
               <Button size="lg" fullWidth>
                 주문하기
               </Button>

@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly VITE_API_URL: string
   readonly VITE_PUBLIC_UPLOAD_BASE: string
   readonly VITE_KAKAO_JS_KEY: string
+  /** 카카오 픽셀 Track ID. 비우면 픽셀 이벤트 미전송. */
+  readonly VITE_KAKAO_PIXEL_ID?: string
   readonly VITE_VAPID_PUBLIC_KEY: string
   /** 로컬 개발 전용. true 면 카카오/API 없이 관리자로 들어간다. */
   readonly VITE_DEV_BYPASS_AUTH?: string
