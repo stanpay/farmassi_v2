@@ -4,6 +4,8 @@
 // - 콜백이 켜진 블록이면 바로 useCallback 으로 답하고, 실제 답은 callbackUrl 로 보냅니다.
 // - 답은 Claude 가 만듭니다. 운영 DB 는 api.shop.lkim.me/chatbot/query(읽기 전용)로 조회합니다.
 //   명세: doc/kakao-chatbot/developer-handoff.md
+// - 농가 회원이 보낸 주문은 /chatbot/rpc/review-farm-orders 로 검수하고, 사용자가 확인하면
+//   /chatbot/rpc/create-farm-orders 로 등록합니다. 검수 중간 상태는 kakao_order_drafts 에 둡니다.
 //
 // 시크릿: KAKAO_SKILL_TOKEN, ANTHROPIC_API_KEY, CHATBOT_API_KEY
 // 선택:   CHATBOT_QUERY_URL (기본 https://api.shop.lkim.me/chatbot/query)
@@ -18,11 +20,14 @@ const ERROR_TEXT = "죄송해요, 잠시 문제가 생겼어요. 조금 뒤에 �
 const BUSY_TEXT = "확인할 내용이 많아 답변이 늦어지고 있어요. 조금 뒤에 다시 물어봐 주세요.";
 
 const MODEL = "claude-opus-5-5";
-const MAX_TOOL_ROUNDS = 6;          // Claude ↔ 도구 왕복 최대 횟수
+const MAX_TOOL_ROUNDS = 8;          // Claude ↔ 도구 왕복 최대 횟수
 const DEADLINE_MS = 110_000;        // Edge Function 실행 한도(무료 150초) 안에서 끝내기
 const HISTORY_ROWS = 2;             // 처음엔 직전 한 번의 대화(고객 질문 + 봇 답)만 넘김. 더는 get_history 로
 const HISTORY_PAGE_MAX = 20;        // get_history 한 번에 최대 몇 건
-const KAKAO_TEXT_LIMIT = 1000;      // simpleText 최대 글자 수
+const KAKAO_TEXT_LIMIT = 1000;      // simpleText 말풍선 하나의 최대 글자 수
+const KAKAO_MAX_BUBBLES = 3;        // 한 응답에 보낼 수 있는 말풍선 수
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;   // 주문 검수 내용을 보관하는 시간
+const CANDIDATE_VIEW_MAX = 10;      // Claude 에게 보여 줄 주소·상품 후보 수
 
 // 요청마다 읽음(시크릿 변경 즉시 반영). 붙여넣기로 딸려 온 줄바꿈은 무시.
 const env = (name: string) => (Deno.env.get(name) ?? "").trim();
@@ -30,9 +35,27 @@ const queryUrl = () => env("CHATBOT_QUERY_URL") || "https://api.shop.lkim.me/cha
 
 type SkillResponse = Record<string, unknown>;
 
+// 긴 답은 줄 경계에서 잘라 말풍선 여러 개로 보낸다(주문 검수 내용처럼 목록이 길 때).
+function splitForKakao(text: string): string[] {
+  const chunks: string[] = [];
+  let rest = text.trim();
+  while (rest.length > KAKAO_TEXT_LIMIT && chunks.length < KAKAO_MAX_BUBBLES - 1) {
+    let cut = rest.lastIndexOf("\n\n", KAKAO_TEXT_LIMIT);
+    if (cut < KAKAO_TEXT_LIMIT * 0.4) cut = rest.lastIndexOf("\n", KAKAO_TEXT_LIMIT);
+    if (cut < KAKAO_TEXT_LIMIT * 0.4) cut = KAKAO_TEXT_LIMIT;
+    chunks.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest.length > KAKAO_TEXT_LIMIT) rest = rest.slice(0, KAKAO_TEXT_LIMIT - 1) + "…";
+  if (rest) chunks.push(rest);
+  return chunks.length ? chunks : [ERROR_TEXT];
+}
+
 function simpleText(text: string): SkillResponse {
-  const t = text.length > KAKAO_TEXT_LIMIT ? text.slice(0, KAKAO_TEXT_LIMIT - 1) + "…" : text;
-  return { version: "2.0", template: { outputs: [{ simpleText: { text: t } }] } };
+  return {
+    version: "2.0",
+    template: { outputs: splitForKakao(text).map((t) => ({ simpleText: { text: t } })) },
+  };
 }
 
 function json(body: unknown, status = 200): Response {
@@ -57,6 +80,12 @@ interface Ctx {
   utterance: string;
   meta: Record<string, unknown>;   // 답장 행의 raw.claude 로 저장
   historyBeforeId: number | null;  // get_history 가 이 id 보다 오래된 대화를 읽음
+  memberUserId: string | null;     // 매칭된 팜어시 회원 (없으면 null)
+  draft: Draft | null;             // 진행 중인 주문 검수
+  draftRev: number;                // 마지막으로 읽거나 쓴 검수 내용의 rev (0 = 없음)
+  saveAllowed: boolean;            // 이번 메시지를 받기 전에 이미 전부 ok 였는지(사용자가 확인 질문을 본 상태)
+  draftChanged: boolean;           // 이번 메시지를 처리하면서 검수 내용이 바뀌었는지
+  rpcLog: Record<string, unknown>[];
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +151,498 @@ async function findMember(appUserId: string | null): Promise<Member | null | "er
 }
 
 // ---------------------------------------------------------------------------
+// 주문 검수·등록 (농가 회원이 카톡으로 보낸 주문)
+//
+// 백엔드 /chatbot/rpc/review-farm-orders · create-farm-orders 를 부른다.
+// 명세: develop 브랜치 doc/chatbot/order-review.md, doc/backend/orders/command/review-farm-orders.md
+// - 검수 API 는 상태를 저장하지 않는다. 직전 응답의 orders 를 kakao_order_drafts 에 통째로 보관했다가
+//   그대로 돌려보낸다. (addressToken 같은 서버 서명 값이 Claude 를 거치지 않게 한다)
+// - 누구 권한으로 실행할지(kakaoUserId)는 카카오가 보낸 appUserId 로만 정한다. Claude 입력에서 받지 않는다.
+// - 등록(save_orders)은 "전부 ok 인 상태를 사용자가 한 번 본 다음 메시지"에서만 된다. 코드로 막는다.
+
+// deno-lint-ignore no-explicit-any
+type Json = any;
+
+interface Draft {
+  farm_id: string | null;
+  farm_name: string | null;
+  pending_text: string | null;      // 농가를 못 정해 아직 검수하지 못한 원문
+  orders: Json[];                   // review 응답의 orders 그대로
+  summary: { total: number; ready: number; needsFix: number } | null;
+  save_request: Json | null;        // 전부 ok 일 때만
+  saving_at: string | null;         // 등록 요청을 보냈는데 결과를 모르는 상태
+  rev: number;
+  updated_at: string;
+}
+
+const DRAFT_COLS = "farm_id, farm_name, pending_text, orders, summary, save_request, saving_at, rev, updated_at";
+
+function emptyDraft(): Draft {
+  return { farm_id: null, farm_name: null, pending_text: null, orders: [], summary: null,
+    save_request: null, saving_at: null, rev: 0, updated_at: "" };
+}
+
+function allOk(d: Draft | null): boolean {
+  return !!d && d.orders.length > 0 && !!d.save_request && d.summary?.needsFix === 0;
+}
+
+async function readDraft(ctx: Ctx): Promise<Draft | null> {
+  if (!ctx.kakaoUserId) return null;
+  const { data, error } = await ctx.db.from("kakao_order_drafts").select(DRAFT_COLS)
+    .eq("kakao_user_id", ctx.kakaoUserId).maybeSingle();
+  if (error) console.error("read draft failed", error);
+  if (error || !data) return null;
+  if (Date.now() - new Date(data.updated_at).getTime() > DRAFT_TTL_MS) {
+    await ctx.db.from("kakao_order_drafts").delete().eq("kakao_user_id", ctx.kakaoUserId);
+    return null;
+  }
+  return { ...data, orders: Array.isArray(data.orders) ? data.orders : [], rev: Number(data.rev) || 0 } as Draft;
+}
+
+// DB 의 최신 내용으로 맞춘다. 이번 턴에 알던 것과 다르면(다른 메시지가 그사이 바꿨으면) true.
+async function syncDraft(ctx: Ctx): Promise<boolean> {
+  const fresh = await readDraft(ctx);
+  const changed = (fresh?.rev ?? 0) !== ctx.draftRev;
+  ctx.draft = fresh;
+  ctx.draftRev = fresh?.rev ?? 0;
+  return changed;
+}
+
+async function writeDraft(ctx: Ctx, draft: Draft): Promise<string | null> {
+  if (!ctx.kakaoUserId) return "대화 사용자 정보를 저장하지 못해 검수 내용을 보관할 수 없습니다.";
+  const rev = Math.max(Date.now(), ctx.draftRev + 1);
+  const updatedAt = new Date().toISOString();
+  const { error } = await ctx.db.from("kakao_order_drafts").upsert({
+    kakao_user_id: ctx.kakaoUserId,
+    farm_id: draft.farm_id,
+    farm_name: draft.farm_name,
+    pending_text: draft.pending_text,
+    orders: draft.orders,
+    summary: draft.summary,
+    save_request: draft.save_request,
+    saving_at: draft.saving_at,
+    rev,
+    updated_at: updatedAt,
+  }, { onConflict: "kakao_user_id" });
+  if (error) {
+    console.error("write draft failed", error);
+    return `검수 내용을 보관하지 못했습니다: ${error.message}`;
+  }
+  ctx.draft = { ...draft, rev, updated_at: updatedAt };
+  ctx.draftRev = rev;
+  ctx.draftChanged = true;
+  return null;
+}
+
+async function dropDraft(ctx: Ctx): Promise<void> {
+  if (ctx.kakaoUserId) {
+    await ctx.db.from("kakao_order_drafts").delete().eq("kakao_user_id", ctx.kakaoUserId);
+  }
+  ctx.draft = null;
+  ctx.draftRev = 0;
+  ctx.draftChanged = true;
+}
+
+interface RpcResult {
+  ok: boolean;
+  status: number;   // 0 = 응답을 못 받음(시간 초과·네트워크)
+  data: Json;
+}
+
+async function callRpc(
+  ctx: Ctx,
+  name: "review-farm-orders" | "create-farm-orders",
+  body: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<RpcResult> {
+  if (!ctx.appUserId) {
+    return { ok: false, status: 0, data: { code: "no_kakao_id",
+      error: "카카오 회원번호(appUserId)를 받지 못했습니다. 팜어시에 카카오로 로그인한 계정으로만 쓸 수 있습니다." } };
+  }
+  const started = Date.now();
+  let result: RpcResult;
+  try {
+    const r = await fetch(new URL(`/chatbot/rpc/${name}`, queryUrl()), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-chatbot-key": env("CHATBOT_API_KEY") },
+      body: JSON.stringify({ ...body, kakaoUserId: ctx.appUserId }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await r.text();
+    let data: Json;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text.slice(0, 500) };
+    }
+    result = { ok: r.ok, status: r.status, data };
+  } catch (e) {
+    result = { ok: false, status: 0, data: { code: "network", error: String(e) } };
+  }
+  ctx.rpcLog.push({
+    name,
+    action: body.action ?? (name === "create-farm-orders" ? "create" : "text"),
+    status: result.status,
+    code: result.data?.code ?? null,
+    ms: Date.now() - started,
+  });
+  return result;
+}
+
+function errBody(r: RpcResult): Record<string, unknown> {
+  return r.data && typeof r.data === "object" && !Array.isArray(r.data) ? r.data : { error: String(r.data) };
+}
+
+// 빈 값은 빼서 Claude 에게 넘기는 양을 줄인다.
+function compact(obj: Record<string, unknown>): Record<string, unknown> {
+  const res: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || v === undefined || v === "" || (Array.isArray(v) && v.length === 0)) continue;
+    res[k] = v;
+  }
+  return res;
+}
+
+// Claude 에게 보여 주는 주문 한 건. 서명·원문 덩어리는 빼고, 후보에는 고를 번호(no)를 붙인다.
+function orderView(o: Json): Record<string, unknown> {
+  const f = o?.fields ?? {};
+  const bad = o?.status !== "ok";
+  const addr: Json[] = Array.isArray(o?.addressCandidates) ? o.addressCandidates : [];
+  const prod: Json[] = Array.isArray(o?.productCandidates) ? o.productCandidates : [];
+  return compact({
+    no: o?.index,
+    status: o?.status,
+    recipient: f.recipientName,
+    phone: f.phone,
+    zonecode: f.zonecode,
+    address: f.address,
+    address_detail: f.addressDetail,
+    address_in_message: bad ? f.addressRaw : "",
+    product: f.productName,
+    product_in_message: f.productQuery,
+    unit_price: f.unitPrice || null,
+    quantity: f.quantity,
+    sender: f.senderName,
+    sender_phone: f.senderPhone,
+    depositor: f.depositorName,
+    memo: f.memo,
+    errors: (Array.isArray(o?.errors) ? o.errors : [])
+      .map((e: Json) => ({ field: e?.field, code: e?.code, message: e?.message })),
+    address_candidates: bad
+      ? addr.slice(0, CANDIDATE_VIEW_MAX)
+        .map((c, i) => compact({ no: i + 1, zip: c?.zipNo, road: c?.roadAddress, jibun: c?.jibunAddress }))
+      : [],
+    address_candidates_total: bad && addr.length > CANDIDATE_VIEW_MAX ? addr.length : null,
+    product_candidates: prod.slice(0, CANDIDATE_VIEW_MAX)
+      .map((c, i) => compact({ no: i + 1, name: c?.name, unit: c?.unit, price: c?.price })),
+  });
+}
+
+function draftView(d: Draft): Record<string, unknown> {
+  return compact({
+    farm: d.farm_id || d.farm_name ? compact({ id: d.farm_id, name: d.farm_name }) : null,
+    summary: d.summary,
+    all_ok: d.orders.length ? allOk(d) : null,
+    orders: d.orders.map(orderView),
+    waiting_farm_choice: d.pending_text
+      ? "농가가 정해지지 않아 검수하지 못한 주문 원문이 보관돼 있음 (review_orders source=pending, farm_id 지정)"
+      : "",
+    save_in_doubt: d.saving_at
+      ? "등록 요청을 보냈지만 결과를 확인하지 못했음. 중복 등록 주의 (save_orders 응답의 안내를 따를 것)"
+      : "",
+  });
+}
+
+async function resolveFarm(ctx: Ctx, farmId: string | null): Promise<{ id: string | null; name: string | null }> {
+  if (farmId) {
+    const r = await runSql(`select name from public.farms where id::text = $1`, [farmId]);
+    if (!r.ok) return { id: farmId, name: null };
+    const rows = (JSON.parse(r.body) as { rows: [string][] }).rows;
+    return { id: farmId, name: rows[0]?.[0] ?? null };
+  }
+  // farmId 없이 통과했다면 서버가 "회원의 농가가 하나뿐"이라 그 농가로 채운 것이다.
+  if (!ctx.memberUserId) return { id: null, name: null };
+  const r = await runSql(
+    `select f.id::text, f.name from public.farm_members m join public.farms f on f.id = m.farm_id
+      where m.user_id::text = $1`,
+    [ctx.memberUserId],
+  );
+  if (!r.ok) return { id: null, name: null };
+  const rows = (JSON.parse(r.body) as { rows: [string, string][] }).rows;
+  return rows.length === 1 ? { id: rows[0][0], name: rows[0][1] } : { id: null, name: null };
+}
+
+// review-farm-orders 응답을 검수 내용으로 보관한다.
+// farmId 는 이번 검수에 쓴 농가. 모르면(서버가 채운 경우) 응답이나 회원의 농가에서 찾는다.
+// 예전 검수의 농가를 물려받지 않는다(다른 농가였을 수 있다).
+async function storeReview(ctx: Ctx, data: Json, farmId: string | null): Promise<string | null> {
+  const prev = ctx.draft;
+  let id: string | null = farmId ?? data?.saveRequest?.farmId ?? null;
+  let name: string | null = id && id === prev?.farm_id ? prev?.farm_name ?? null : null;
+  if (!id || !name) {
+    const farm = await resolveFarm(ctx, id);
+    id = farm.id ?? id;
+    name = farm.name;
+  }
+  return await writeDraft(ctx, {
+    farm_id: id,
+    farm_name: name,
+    pending_text: null,
+    orders: Array.isArray(data?.orders) ? data.orders : [],
+    summary: data?.summary ?? null,
+    save_request: data?.saveRequest ?? null,
+    saving_at: null,
+    rev: 0,
+    updated_at: "",
+  });
+}
+
+type ToolOut = [content: string, isError: boolean];
+const out = (obj: Record<string, unknown>, isError = false): ToolOut => [JSON.stringify(obj), isError];
+
+// 검수 내용을 고치는 도구들의 공통 준비. 문제가 있으면 Claude 에게 돌려줄 응답을 준다.
+async function needDraft(ctx: Ctx): Promise<ToolOut | null> {
+  if (await syncDraft(ctx)) {
+    return out({ ok: false, code: "changed",
+      error: "검수 내용이 방금 다른 메시지로 바뀌었습니다. 현재 상태를 보고 다시 판단하세요.",
+      review: ctx.draft ? draftView(ctx.draft) : null }, true);
+  }
+  if (!ctx.draft || !ctx.draft.orders.length) {
+    return out({ ok: false, code: "no_review",
+      error: "진행 중인 주문 검수가 없습니다. 먼저 review_orders 로 검수하세요." }, true);
+  }
+  return null;
+}
+
+// 주문 번호(no, 1부터) → orders 배열 위치(0부터). 범위를 벗어나면 -1.
+function orderAt(ctx: Ctx, orderNo: unknown): number {
+  const i = Number(orderNo) - 1;
+  return Number.isInteger(i) && i >= 0 && i < (ctx.draft?.orders.length ?? 0) ? i : -1;
+}
+
+// 보관 중인 orders 를 그대로 돌려보내 다시 검수하고, 결과를 보관한다.
+async function reReview(ctx: Ctx, body: Record<string, unknown>, orders?: Json[]): Promise<ToolOut> {
+  const d = ctx.draft!;
+  const r = await callRpc(ctx, "review-farm-orders",
+    { ...(d.farm_id ? { farmId: d.farm_id } : {}), ...body, orders: orders ?? d.orders }, 60_000);
+  if (!r.ok) return out({ ok: false, status: r.status, ...errBody(r), note: "검수 내용은 바뀌지 않았습니다." }, true);
+  const err = await storeReview(ctx, r.data, d.farm_id);
+  if (err) return out({ ok: false, error: err }, true);
+  return out({ ok: true, review: draftView(ctx.draft!) });
+}
+
+async function toolReviewOrders(ctx: Ctx, input: Json): Promise<ToolOut> {
+  const source = String(input?.source ?? "current_message");
+  const append = input?.append === true;
+  const text = source === "text"
+    ? String(input?.text ?? "")
+    : source === "pending"
+    ? (ctx.draft?.pending_text ?? "")
+    : ctx.utterance;
+  if (text.trim().length < 2) {
+    return out({ ok: false,
+      error: source === "pending" ? "보관된 주문 원문이 없습니다." : "주문 원문이 비어 있습니다." }, true);
+  }
+  const askedFarm = typeof input?.farm_id === "string" && input.farm_id.trim() ? input.farm_id.trim() : null;
+  const farmId: string | null = askedFarm ?? (append ? ctx.draft?.farm_id ?? null : null);
+
+  const r = await callRpc(ctx, "review-farm-orders", { text, ...(farmId ? { farmId } : {}) }, 100_000);
+  if (!r.ok) {
+    const code = r.data?.code;
+    if (code === "farm_required" || code === "no_farm") {
+      // 농가를 정한 뒤 같은 원문으로 다시 검수할 수 있게 보관한다.
+      await syncDraft(ctx);
+      await writeDraft(ctx, { ...(ctx.draft ?? emptyDraft()), pending_text: text });
+    }
+    return out({ ok: false, status: r.status, ...errBody(r) }, true);
+  }
+
+  let data = r.data;
+  const found: Json[] = Array.isArray(data?.orders) ? data.orders : [];
+  const ignored: string[] = Array.isArray(data?.ignored)
+    ? data.ignored.slice(0, 10).map((s: Json) => String(s).slice(0, 200))
+    : [];
+  if (!found.length) {
+    return out(compact({ ok: true, orders_found: 0, ignored,
+      note: "주문으로 읽힌 내용이 없습니다. 검수 내용은 바뀌지 않았습니다." }));
+  }
+
+  // 그사이 다른 메시지가 검수 내용을 바꿨으면 덮어쓰지 않고 합친다.
+  const concurrent = await syncDraft(ctx);
+  const base: Json[] = append || concurrent ? (ctx.draft?.orders ?? []) : [];
+  if (base.length) {
+    const baseFarm = ctx.draft?.farm_id ?? null;
+    if (askedFarm && baseFarm && askedFarm !== baseFarm) {
+      return out({ ok: false, code: "farm_mismatch",
+        error: "진행 중인 검수는 다른 농가의 주문입니다. 먼저 등록하거나 취소한 뒤 다시 검수하세요.",
+        review: draftView(ctx.draft!) }, true);
+    }
+    const fid = farmId ?? baseFarm;
+    const r2 = await callRpc(ctx, "review-farm-orders",
+      { action: "recheck", orders: [...base, ...found], ...(fid ? { farmId: fid } : {}) }, 60_000);
+    if (!r2.ok) {
+      return out({ ok: false, status: r2.status, ...errBody(r2),
+        note: "기존 검수 내용과 합치지 못했습니다. 검수 내용은 바뀌지 않았습니다." }, true);
+    }
+    data = r2.data;
+  }
+  const err = await storeReview(ctx, data, farmId ?? (base.length ? ctx.draft?.farm_id ?? null : null));
+  if (err) return out({ ok: false, error: err }, true);
+  return out(compact({ ok: true, orders_found: found.length, merged_with_existing: base.length || null, ignored,
+    review: draftView(ctx.draft!) }));
+}
+
+async function toolSelectAddress(ctx: Ctx, input: Json): Promise<ToolOut> {
+  const bad = await needDraft(ctx);
+  if (bad) return bad;
+  const i = orderAt(ctx, input?.order_no);
+  if (i < 0) return out({ ok: false, error: "order_no 는 검수 내용의 주문 번호(no)입니다." }, true);
+  const no = Number(input?.candidate_no);
+  if (!Number.isInteger(no) || no < 1) {
+    return out({ ok: false, error: "candidate_no 는 address_candidates 의 번호(no)입니다." }, true);
+  }
+  const selection: Record<string, unknown> = { candidateNo: no };
+  if (typeof input?.address_detail === "string" && input.address_detail.trim()) {
+    selection.addressDetail = input.address_detail.trim();
+  }
+  return await reReview(ctx, { action: "select_address", targetIndex: i, selection });
+}
+
+const PATCH_FIELDS: [input: string, api: string][] = [
+  ["address", "address"],
+  ["address_detail", "addressDetail"],
+  ["recipient_name", "recipientName"],
+  ["phone", "phone"],
+  ["sender_name", "senderName"],
+  ["sender_phone", "senderPhone"],
+  ["depositor_name", "depositorName"],
+  ["memo", "memo"],
+  ["product_query", "productQuery"],
+];
+
+async function toolPatchOrder(ctx: Ctx, input: Json): Promise<ToolOut> {
+  const bad = await needDraft(ctx);
+  if (bad) return bad;
+  const i = orderAt(ctx, input?.order_no);
+  if (i < 0) return out({ ok: false, error: "order_no 는 검수 내용의 주문 번호(no)입니다." }, true);
+  const patch: Record<string, unknown> = {};
+  for (const [from, to] of PATCH_FIELDS) {
+    if (typeof input?.[from] === "string") patch[to] = input[from];
+  }
+  if (input?.quantity !== undefined && input?.quantity !== null) patch.quantity = String(input.quantity);
+  if (input?.product_no !== undefined && input?.product_no !== null) {
+    const candidates: Json[] = ctx.draft!.orders[i]?.productCandidates ?? [];
+    const picked = candidates[Number(input.product_no) - 1];
+    if (!picked?.id) {
+      return out({ ok: false, error: "product_no 는 그 주문의 product_candidates 번호(no)입니다." }, true);
+    }
+    patch.productId = picked.id;
+    delete patch.productQuery;
+  }
+  if (!Object.keys(patch).length) return out({ ok: false, error: "고칠 칸을 하나 이상 넣으세요." }, true);
+  return await reReview(ctx, { action: "patch_order", targetIndex: i, patch });
+}
+
+async function toolRemoveOrder(ctx: Ctx, input: Json): Promise<ToolOut> {
+  const bad = await needDraft(ctx);
+  if (bad) return bad;
+  const i = orderAt(ctx, input?.order_no);
+  if (i < 0) return out({ ok: false, error: "order_no 는 검수 내용의 주문 번호(no)입니다." }, true);
+  const rest = ctx.draft!.orders.filter((_, idx) => idx !== i);
+  if (!rest.length) {
+    await dropDraft(ctx);
+    return out({ ok: true, review: null, note: "남은 주문이 없어 검수를 끝냈습니다." });
+  }
+  return await reReview(ctx, { action: "recheck" }, rest);
+}
+
+async function toolRecheckOrders(ctx: Ctx): Promise<ToolOut> {
+  const bad = await needDraft(ctx);
+  if (bad) return bad;
+  return await reReview(ctx, { action: "recheck" });
+}
+
+const IN_DOUBT_HELP =
+  "중복 등록을 막기 위해 다시 보내지 않습니다. run_sql 로 방금 등록됐는지 확인하세요" +
+  "(orders 에서 이 회원이 created_by 이고 created_at 이 방금인 주문). " +
+  "등록됐으면 cancel_orders 로 검수를 끝내고 주문번호를 알려 주고, " +
+  "안 됐으면 recheck_orders 로 다시 검수한 뒤 사용자에게 다시 확인받으세요.";
+
+async function toolSaveOrders(ctx: Ctx): Promise<ToolOut> {
+  const changed = await syncDraft(ctx);
+  const d = ctx.draft;
+  if (!d || !d.orders.length) {
+    return out({ ok: false, code: "no_review", error: "진행 중인 주문 검수가 없습니다." }, true);
+  }
+  if (d.saving_at) {
+    return out({ ok: false, code: "save_in_doubt",
+      error: `이전 등록 요청의 결과를 확인하지 못한 상태입니다. ${IN_DOUBT_HELP}` }, true);
+  }
+  if (!allOk(d)) {
+    return out({ ok: false, code: "needs_fix", error: "확인이 필요한 주문이 남아 있어 등록할 수 없습니다.",
+      review: draftView(d) }, true);
+  }
+  // 사용자가 "전부 ok" 상태를 한 번 보고 답한 경우에만 등록한다.
+  if (changed || !ctx.saveAllowed || ctx.draftChanged) {
+    return out({ ok: false, code: "confirm_first",
+      error: "사용자 확인 전에는 등록하지 않습니다. 등록할 내용을 보여 주고 등록할지 물은 뒤, " +
+        "사용자가 그다음 메시지에서 동의하면 호출하세요.",
+      review: draftView(d) }, true);
+  }
+
+  const markErr = await writeDraft(ctx, { ...d, saving_at: new Date().toISOString() });
+  if (markErr) return out({ ok: false, error: markErr }, true);
+
+  const r = await callRpc(ctx, "create-farm-orders", d.save_request, 60_000);
+  if (r.ok) {
+    const saved: Json[] = Array.isArray(r.data?.orders) ? r.data.orders : [];
+    await dropDraft(ctx);
+    ctx.meta.saved = saved.map((o) => ({ id: o?.id, order_no: o?.orderNo, total: o?.total }));
+    return out(compact({ ok: true, farm: d.farm_name,
+      saved: saved.map((o) => ({ order_no: o?.orderNo, total: o?.total })) }));
+  }
+  // 응답을 못 받았거나(0) 게이트웨이 오류면 들어갔는지 알 수 없다.
+  if (r.status === 0 || r.status === 502 || r.status === 504) {
+    return out({ ok: false, code: "save_in_doubt", status: r.status,
+      error: `등록 요청의 결과를 확인하지 못했습니다. ${IN_DOUBT_HELP}` }, true);
+  }
+  // 서버가 거절했다. 전부 아니면 전무라 한 건도 들어가지 않았다.
+  await writeDraft(ctx, { ...d, saving_at: null });
+  return out({ ok: false, status: r.status, ...errBody(r), note: "한 건도 등록되지 않았습니다." }, true);
+}
+
+async function toolCancelOrders(ctx: Ctx): Promise<ToolOut> {
+  await dropDraft(ctx);
+  return out({ ok: true, note: "주문 검수를 버렸습니다." });
+}
+
+async function runOrderTool(ctx: Ctx, name: string, input: Json): Promise<ToolOut | null> {
+  switch (name) {
+    case "review_orders": return await toolReviewOrders(ctx, input);
+    case "select_address": return await toolSelectAddress(ctx, input);
+    case "patch_order": return await toolPatchOrder(ctx, input);
+    case "remove_order": return await toolRemoveOrder(ctx, input);
+    case "recheck_orders": return await toolRecheckOrders(ctx);
+    case "save_orders": return await toolSaveOrders(ctx);
+    case "cancel_orders": return await toolCancelOrders(ctx);
+    default: return null;
+  }
+}
+
+// 고객 정보(system 두 번째 블록)에 붙이는 현재 검수 상태.
+function draftContext(ctx: Ctx): string {
+  const d = ctx.draft;
+  if (!d) return "";
+  const lines = ["", "진행 중인 주문 검수 (등록 전, 서버 보관)", JSON.stringify(draftView(d))];
+  if (d.orders.length) {
+    lines.push(ctx.saveAllowed
+      ? "- 전부 확인된 상태다. 사용자가 이번 메시지에서 등록에 동의했으면 save_orders 를 부른다."
+      : "- 아직 등록할 수 없다(확인이 필요한 주문이 있거나 결과 확인이 필요함).");
+  }
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // Claude
 
 // 처음 뜰 때 SDK 로딩이 2초쯤 걸려 카카오 5초 제한을 위협한다.
@@ -159,7 +680,28 @@ const INSTRUCTIONS = `너는 팜어시(농가 직거래 쇼핑몰) 카카오톡 
 - 다른 고객의 이름·연락처·주소·주문 내용은 알려주지 않는다.
 - 회원 매칭이 안 된 고객이 본인 주문을 물으면, 팜어시에 카카오로 로그인한 계정으로 문의해 달라고 안내한다.
 - 환불·교환·주소 변경처럼 처리가 필요한 요청은 접수 내용을 정리해 주고 담당자가 확인 후 연락드린다고 안내한다.
-  챗봇이 직접 처리했다고 말하지 않는다.`;
+  챗봇이 직접 처리했다고 말하지 않는다.
+
+주문 등록 (농가 회원용)
+- 농가 회원이 손님에게 받은 주문 내용(받는 분, 연락처, 주소, 상품 등)을 보내면 review_orders 로 검수한다.
+  원문은 고치거나 요약하지 않는다(source=current_message 면 방금 메시지가 그대로 넘어간다).
+- 검수 내용은 서버가 보관한다. 고객 정보 아래 "진행 중인 주문 검수"에 현재 상태가 나오고, 도구 응답의 review 도 같은 형식이다.
+- 확인이 필요한 주문(status 가 ok 가 아님)이 있으면 번호가 앞선 것부터 하나씩 묻는다.
+  needs_address_select: address_candidates 를 번호와 함께 보여 주고 고르게 한다. 후보가 1건이어도 사용자가 확인하기 전에는 고르지 않는다.
+  needs_address_fix: errors 를 보고 동·호만 받을지 주소 전체를 다시 받을지 정한다.
+  needs_product_select: product_candidates 를 번호, 가격과 함께 보여 주고 고르게 한다.
+  needs_field_fix: errors 에 나온 칸만 다시 받는다.
+- 사용자의 답은 select_address, patch_order 로 반영한다. 사용자가 말하지 않은 값을 추측해서 채우지 않는다.
+- 전부 ok 가 되면 농가 이름과 주문별 받는 분, 주소, 상품, 수량, 금액을 보여 주고 등록할지 묻는다.
+  메시지에 적힌 상품 문구(product_in_message)와 매칭된 상품이 다르게 보이면 그 점도 짚는다. 이 답에서는 save_orders 를 부르지 않는다.
+- 사용자가 그다음 메시지에서 등록에 동의하면 save_orders 를 부르고, 응답의 주문번호와 금액을 알려 준다.
+  도구가 성공하지 않았으면 등록됐다고 말하지 않는다.
+- 검수 중에 주문 원문이 더 오면 이어서 보낸 것인지(append) 새로 시작하는 것인지 문맥으로 판단하고, 애매하면 묻는다.
+- 그만두겠다고 하면 cancel_orders, 특정 주문만 빼 달라고 하면 remove_order.
+- 오류 code 가 not_linked, no_kakao_id 면 팜어시에 카카오로 로그인한 농가 계정만 쓸 수 있는 기능이라고 안내한다.
+  farm_required 면 farms 를 보여 주고 어느 농가인지 물은 뒤 review_orders(source=pending, farm_id)로 다시 검수한다.
+  no_farm 은 연결된 농가가 없다는 뜻이다. 사용자가 관리자라서 농가를 지정하면 run_sql 로 농가 id 를 찾아 같은 방식으로 다시 검수한다.
+- 주문 검수 내용을 보여 줄 때는 400자를 넘겨도 된다(말풍선 3개, 각 1000자까지 나뉘어 나간다).`;
 
 const RUN_SQL_TOOL = {
   name: "run_sql",
@@ -197,8 +739,101 @@ const GET_HISTORY_TOOL = {
   },
 };
 
+const NO_INPUT = { type: "object" as const, properties: {}, additionalProperties: false };
+
+const ORDER_TOOLS = [
+  {
+    name: "review_orders",
+    description:
+      "농가 회원이 보낸 주문 원문을 검수한다(파싱, 상품 매칭, 우체국 주소 확정, 동·호, 필수값). 등록은 하지 않는다. " +
+      "결과는 서버가 보관하고 review 로 돌려준다. 원문 파싱에 수십 초 걸릴 수 있다. " +
+      "source: current_message=사용자가 방금 보낸 메시지 그대로(보통 이것), " +
+      "pending=농가를 정하지 못해 보관해 둔 원문, text=여러 메시지에 나뉜 원문을 합쳐서 직접 넘길 때. " +
+      "append=true 면 진행 중인 검수에 주문을 더하고, 아니면 새로 시작한다(기존 검수는 버려진다).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        source: { type: "string", enum: ["current_message", "pending", "text"] },
+        text: { type: "string", description: "source=text 일 때만. 주문 원문 그대로" },
+        farm_id: { type: "string", description: "농가 id(uuid). 회원의 농가가 하나뿐이면 생략" },
+        append: { type: "boolean" },
+      },
+      required: ["source"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "select_address",
+    description:
+      "검수 중인 주문 하나에 사용자가 고른 주소 후보를 넣고 다시 검수한다. 사용자가 고르거나 확인한 뒤에만 부른다.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        order_no: { type: "integer", description: "주문 번호(no)" },
+        candidate_no: { type: "integer", description: "그 주문 address_candidates 의 번호(no)" },
+        address_detail: { type: "string", description: "사용자가 동·호를 같이 말했을 때만" },
+      },
+      required: ["order_no", "candidate_no"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "patch_order",
+    description:
+      "검수 중인 주문 하나의 칸을 사용자가 말한 값으로 고치고 다시 검수한다. 고칠 칸만 넣는다. " +
+      "address 는 새 주소 전체(우체국부터 다시 찾는다), address_detail 은 동·호만. " +
+      "상품은 product_no(product_candidates 번호)로 고르거나 product_query(상품 문구)로 다시 매칭한다.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        order_no: { type: "integer", description: "주문 번호(no)" },
+        address: { type: "string" },
+        address_detail: { type: "string" },
+        recipient_name: { type: "string" },
+        phone: { type: "string" },
+        sender_name: { type: "string" },
+        sender_phone: { type: "string" },
+        depositor_name: { type: "string" },
+        memo: { type: "string" },
+        product_no: { type: "integer" },
+        product_query: { type: "string" },
+        quantity: { type: "integer" },
+      },
+      required: ["order_no"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "remove_order",
+    description: "검수 중인 주문 하나를 뺀다. 사용자가 빼 달라고 했을 때만.",
+    input_schema: {
+      type: "object" as const,
+      properties: { order_no: { type: "integer", description: "주문 번호(no)" } },
+      required: ["order_no"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "recheck_orders",
+    description: "진행 중인 검수 전체를 지금 기준으로 다시 검수한다.",
+    input_schema: NO_INPUT,
+  },
+  {
+    name: "save_orders",
+    description:
+      "검수가 전부 ok 인 주문을 실제로 등록한다. 등록할 내용을 보여 주고 물은 뒤, " +
+      "사용자가 그다음 메시지에서 동의했을 때만 부른다. 검수와 등록을 같은 답 안에서 함께 하지 않는다.",
+    input_schema: NO_INPUT,
+  },
+  {
+    name: "cancel_orders",
+    description: "진행 중인 주문 검수를 버린다. 사용자가 그만두겠다고 했을 때.",
+    input_schema: NO_INPUT,
+  },
+];
+
 // 도구 순서는 고정(캐시가 접두사 일치라 순서가 바뀌면 캐시가 깨진다).
-const TOOLS = [RUN_SQL_TOOL, GET_HISTORY_TOOL];
+const TOOLS = [RUN_SQL_TOOL, GET_HISTORY_TOOL, ...ORDER_TOOLS];
 
 async function getHistoryPage(ctx: Ctx, limit: number): Promise<string> {
   if (!ctx.kakaoUserId || !ctx.historyBeforeId) return "(더 이전 대화 없음)";
@@ -236,7 +871,7 @@ function customerContext(ctx: Ctx, member: Member | null | "error"): string {
     lines.push("- 카카오 회원번호를 받지 못함. 회원 여부를 알 수 없음.");
   }
   lines.push(`- 지금 시각: ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}`);
-  return lines.join("\n");
+  return lines.join("\n") + draftContext(ctx);
 }
 
 // 처음엔 직전 한 번의 대화만. 그보다 앞은 get_history 로 필요할 때만 읽는다.
@@ -275,9 +910,13 @@ async function buildReply(ctx: Ctx): Promise<SkillResponse> {
       .eq("id", ctx.kakaoUserId).maybeSingle();
     ctx.appUserId = data?.app_user_id ?? null;
   }
-  const [schema, member, history] = await Promise.all([
-    loadSchema(), findMember(ctx.appUserId), loadHistory(ctx),
+  const [schema, member, history, draft] = await Promise.all([
+    loadSchema(), findMember(ctx.appUserId), loadHistory(ctx), readDraft(ctx),
   ]);
+  ctx.memberUserId = member && member !== "error" ? member.user_id : null;
+  ctx.draft = draft;
+  ctx.draftRev = draft?.rev ?? 0;
+  ctx.saveAllowed = allOk(draft) && !draft?.saving_at;
   if (member && member !== "error" && ctx.kakaoUserId) {
     await ctx.db.from("kakao_users").update({ member_id: member.user_id }).eq("id", ctx.kakaoUserId);
   }
@@ -297,8 +936,9 @@ async function buildReply(ctx: Ctx): Promise<SkillResponse> {
   const sqlLog: { sql: string; status: number; ok: boolean }[] = [];
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
   const historyCalls: number[] = [];
+  const orderTools: string[] = [];
   ctx.meta = { model: MODEL, member: member === "error" ? "error" : member?.user_id ?? null,
-    sql: sqlLog, history_calls: historyCalls, usage };
+    sql: sqlLog, history_calls: historyCalls, order_tools: orderTools, rpc: ctx.rpcLog, usage };
 
   for (let round = 1; round <= MAX_TOOL_ROUNDS; round++) {
     if (Date.now() - started > DEADLINE_MS) break;
@@ -343,7 +983,20 @@ async function buildReply(ctx: Ctx): Promise<SkillResponse> {
           results.push({ type: "tool_result", tool_use_id: block.id, content: await getHistoryPage(ctx, limit) });
           continue;
         }
-        if (block.name !== "run_sql" || typeof input?.sql !== "string") {
+        if (block.name !== "run_sql") {
+          let res: ToolOut | null;
+          try {
+            res = await runOrderTool(ctx, block.name, input);
+          } catch (e) {
+            console.error("order tool failed", block.name, e);
+            res = out({ ok: false, error: `도구 실행 중 오류: ${e}` }, true);
+          }
+          if (res) orderTools.push(block.name);
+          else res = [`알 수 없는 도구: ${block.name}`, true];
+          results.push({ type: "tool_result", tool_use_id: block.id, is_error: res[1], content: res[0] });
+          continue;
+        }
+        if (typeof input?.sql !== "string") {
           results.push({ type: "tool_result", tool_use_id: block.id, is_error: true,
             content: "run_sql 에 sql(문자열)을 넣어 다시 호출하세요." });
           continue;
@@ -423,6 +1076,12 @@ async function handle(req: Request, db: SupabaseClient): Promise<Response> {
     utterance: String(ur.utterance ?? ""),
     meta: {},
     historyBeforeId: null,
+    memberUserId: null,
+    draft: null,
+    draftRev: 0,
+    saveAllowed: false,
+    draftChanged: false,
+    rpcLog: [],
   };
 
   // 사용자 저장 + 받은 메시지 저장 (실패해도 답장은 보냄)

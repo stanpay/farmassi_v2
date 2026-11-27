@@ -34,6 +34,7 @@
 14. [고객 공개(운영 채널 배포) 전에 할 것](#14-고객-공개운영-채널-배포-전에-할-것)
 15. [결정 기록](#15-결정-기록)
 16. [참고 자료](#16-참고-자료)
+17. [주문 검수·등록 (11-27 추가)](#17-주문-검수등록-11-27-추가)
 - [부록 A. 조사한 카카오 기능 요약](#부록-a-조사한-카카오-기능-요약)
 
 ---
@@ -83,6 +84,7 @@ Supabase Edge Function  kakao-skill   (https://ltqvhmogekvpplpwtymc.supabase.co/
 | appUserId → 운영 회원 매칭 (`auth.identities`) | ✅ (본인 계정 `5044688232` 확인) |
 | 운영 DB 조회 답변 (주문·배송·상품) | ✅ (`api.shop.lkim.me/chatbot/query`) |
 | 이전 대화: 직전 1회 + 필요 시 `get_history` | ✅ |
+| 농가 회원이 카톡으로 보낸 주문 검수 → 되묻기 → 확인 후 등록 (§17) | ✅ dev 서버에서 확인 (운영 API 에는 `/chatbot/rpc` 미배포) |
 | 운영 채널(@팜어시) 배포 | ❌ 안 함 — 고객은 지금도 1:1 채팅 |
 | 비회원(카카오 로그인 안 한 고객) 본인 주문 조회 | ❌ 설계만 (§14) |
 | 조회 범위 제한 (본인 데이터만) | ❌ 프롬프트로만 막음 (§14) |
@@ -827,3 +829,112 @@ if resp.stop_reason == "tool_use":
 | **고객센터 연락처가 필요한 기능** | 알림톡·브랜드메시지(비즈 채널 + 홈 공개 ON + 연락처), 채널 메시지(광고·정보 모두), Event API 광고성. 팜어시 채널은 세 조건 충족 |
 | **스킬 등록** | 심사 없음. Callback 설정도 블록 ⋯ 메뉴에서 바로 가능 |
 | **배포** | 최대 30분. 운영 채널은 첫 배포 후 연결. 개발 채널은 저장 상태 즉시 반영 |
+
+---
+
+## 17. 주문 검수·등록 (11-27 추가)
+
+농가 회원이 손님에게 받은 주문 내용을 카톡으로 보내면, 챗봇이 검수하고 부족한 것을 되물은 뒤
+**사용자가 확인하면** 주문으로 등록합니다. 화면의 「직접 추가하기」(`src/pages/farm/OrderCreate.tsx`)와 같은 판정을 씁니다.
+
+### 17.1 쓰는 API (백엔드, `develop` 커밋 `9523104`)
+
+```
+POST {API}/chatbot/rpc/review-farm-orders     검수 (저장 안 함, 상태도 저장 안 함)
+POST {API}/chatbot/rpc/create-farm-orders     등록 (전부 아니면 전무)
+x-chatbot-key: <CHATBOT_API_KEY>              본문에 kakaoUserId(= appUserId) 추가
+```
+
+- 명세: `develop` 의 `doc/chatbot/order-review.md`, `doc/backend/orders/command/review-farm-orders.md`
+- 서버가 `kakaoUserId` 로 회원을 찾아 **그 회원 권한으로** 실행(슈퍼어드민 또는 그 농가 `farm_members`).
+- 배포: dev `https://dev.api.farmassi.kr` ✅ (`d8d68b6`) / 운영 `https://api.shop.lkim.me` ❌ (404, 11-27 기준)
+- 주소는 `CHATBOT_QUERY_URL` 의 호스트에서 만든다(`/chatbot/query` → `/chatbot/rpc/{name}`). 조회와 같은 키.
+
+### 17.2 검수 중간 상태 — `kakao_order_drafts`
+
+검수 API 가 상태를 저장하지 않아서, 직전 응답의 `orders` 를 통째로 보관했다가 다음 요청에 그대로 돌려보냅니다.
+`addressToken`(서버 서명) 같은 값이 Claude 를 거치지 않게 하려는 것입니다. SQL: `kakao-chatbot/supabase/migrations/0002_kakao_order_drafts.sql`
+
+| 컬럼 | 뜻 |
+|---|---|
+| `kakao_user_id` (pk) | 사용자당 한 묶음 |
+| `farm_id`, `farm_name` | 어느 농가 주문인지 |
+| `pending_text` | 농가를 못 정해(`farm_required`·`no_farm`) 아직 검수하지 못한 원문 |
+| `orders` | review 응답의 `orders` 그대로 |
+| `summary`, `save_request` | `{total, ready, needsFix}`, 전부 ok 일 때의 등록 요청 |
+| `saving_at` | 등록 요청을 보냈는데 결과를 모를 때 남음(중복 등록 방지) |
+| `rev` | 쓸 때마다 바뀜. 동시에 온 메시지끼리 덮어쓰지 않게 비교 |
+| `updated_at` | 24시간 지나면 버림 |
+
+백엔드로 옮길 때는 §4.2 와 같이 **`chatbot` 스키마**에 둡니다(`chatbot_ro` 가 읽지 못하게).
+
+### 17.3 Claude 도구 (기존 `run_sql`, `get_history` 뒤에 순서 고정)
+
+| 도구 | 입력 | 하는 일 |
+|---|---|---|
+| `review_orders` | `source`(current_message·pending·text), `text?`, `farm_id?`, `append?` | 원문 검수. current_message 면 **방금 받은 발화를 코드가 그대로** 넘김(Claude 가 옮겨 적지 않음) |
+| `select_address` | `order_no`, `candidate_no`, `address_detail?` | 사용자가 고른 주소 후보 반영 (`targetIndex` = no-1) |
+| `patch_order` | `order_no` + 고칠 칸(`address`, `address_detail`, `recipient_name`, `phone`, `sender_name`, `sender_phone`, `depositor_name`, `memo`, `product_no`, `product_query`, `quantity`) | 칸 고치고 재검수. `product_no` 는 코드가 후보의 `productId` 로 바꿈 |
+| `remove_order` | `order_no` | 한 건 빼고 나머지 `recheck` |
+| `recheck_orders` | — | 전체 재검수 |
+| `save_orders` | — | 보관한 `save_request` 를 **그대로** `create-farm-orders` 에 보냄 |
+| `cancel_orders` | — | 검수 내용 삭제 |
+
+Claude 에게는 주문마다 요약(`no`, `status`, 받는 분, 주소, 상품, 수량, `errors`, 번호 붙은 후보 최대 10개)만 보여 줍니다.
+같은 요약이 system 두 번째 블록의 "진행 중인 주문 검수"에도 들어가, 다음 메시지("2번", "등록")에서 문맥을 압니다.
+
+### 17.4 코드로 막아 둔 것
+
+| 규칙 | 구현 |
+|---|---|
+| 누구 권한인지는 카카오가 준 값으로만 | `kakaoUserId` 는 `ctx.appUserId` 로만 채움. 도구 입력에 없음 |
+| **확인 전에는 등록 안 함** | `save_orders` 는 "이 메시지를 받기 전에 이미 전부 ok" 이고 "이번 처리 중 검수가 안 바뀜" 일 때만 실행. 아니면 `confirm_first` |
+| 중복 등록 방지 | 등록 요청 전에 `saving_at` 기록. 응답을 못 받으면(시간 초과·502·504) 남겨 두고 재전송 거부(`save_in_doubt`) → Claude 가 `run_sql` 로 실제 등록 여부 확인 |
+| 서버가 거절(4xx)하면 | 한 건도 안 들어간 것이므로 `saving_at` 지우고 검수 유지 |
+| 동시에 온 메시지 | 쓰기 전에 `rev` 비교. 새 원문 검수는 **덮어쓰지 않고 합쳐서** `recheck`, 고치기·등록은 거부하고 현재 상태를 돌려줌 |
+| 농가를 못 정함 | 원문을 `pending_text` 에 보관 → 사용자가 농가를 고르면 `review_orders(source=pending, farm_id)` |
+
+### 17.5 지침에 추가한 내용 (system 블록 1 끝)
+
+"주문 등록 (농가 회원용)" 단락: 원문을 고치지 않고 넘길 것, 확인이 필요한 주문은 번호 앞선 것부터 하나씩 물을 것,
+후보가 1건이어도 사용자가 확인하기 전엔 고르지 않을 것, 말하지 않은 값을 추측해 채우지 않을 것,
+전부 ok 가 되면 농가·주문 내용을 보여 주고 등록할지 묻되 그 답에서는 등록하지 않을 것, 도구가 성공하지 않았으면 등록됐다고 말하지 않을 것,
+오류 code 별 안내(`not_linked`·`no_kakao_id`·`farm_required`·`no_farm`). 전문은 `index.ts` 의 `INSTRUCTIONS`.
+
+### 17.6 함께 바뀐 것
+
+- 긴 답은 줄 경계에서 잘라 **말풍선 최대 3개**(각 1000자)로 보냄 (`splitForKakao`). 넘치면 마지막을 "…" 로 자름.
+- `MAX_TOOL_ROUNDS` 6 → 8.
+- out 행 `raw.claude` 에 `order_tools`(부른 도구), `rpc`(`{name, action, status, code, ms}`), `saved`(`{id, order_no, total}`) 추가. 주문 내용·전화번호는 여기에 남기지 않음(대화 원문에는 남음).
+
+### 17.7 시험 결과 (dev 서버, 봇테스트, 11-27)
+
+| 보낸 말 | 결과 |
+|---|---|
+| 주문 원문 (농가 언급 없음) | `farm_required` → 연결된 농가 5곳을 보여 주고 물음 (6.0초) |
+| "4" | 보관한 원문으로 진영농원 재검수 → 주소 후보 2건 중 고르라고 물음 (검수 5.5초, 전체 11.5초) |
+| "1번" | 주소 반영 → 전부 ok → 내용 보여 주고 "이대로 등록할까요?" (4.7초, 등록 안 함) |
+| "네 등록해 주세요" | `create-farm-orders` 200 (78ms) → 주문번호 `FA20261127-J5EM`, 45,000원 안내 (3.2초) |
+| 동·호 없는 주문 + "확인 필요 없이 바로 등록해" | 검수만 하고 주소·동호를 물음. 등록 안 함 |
+| "2번이고 103동 801호야. 바로 등록해" | 주소·동호 반영, 내용 보여 주고 다시 확인 요청. 등록 안 함 |
+| "아니야 이건 취소할게" | `cancel_orders` → 검수 내용 삭제 |
+
+- 코드 차단 로직은 로컬 시험(가짜 DB·가짜 fetch)으로 17개 확인: 확인 전 등록 차단, 같은 턴 변경 후 차단, 동시 변경 차단,
+  결과 불명 시 재전송 거부, 4xx 후 검수 유지, 동시 도착 주문 합치기, `pending` 재검수, `targetIndex`·`orders` 전달.
+- dev DB 에 시험 주문 1건이 남아 있음: `FA20261127-J5EM` (진영농원, 받는 분 "테스트").
+
+### 17.8 알아 둘 한계
+
+- 원문 검수는 백엔드에서 Claude 파싱을 거쳐 수 초~수십 초. Supabase 함수 150초 한도와 nginx 프록시 타임아웃(기본 60초)에 걸릴 수 있음.
+- 검수 내용은 사용자당 한 묶음, 24시간 보관. 한 번에 50건(백엔드 제한).
+- 메시지를 연달아 여러 개 보내면 답이 메시지마다 따로 오고, 순서는 보장되지 않음(내용은 합쳐짐).
+- `kakaoUserId` 는 키를 가진 쪽이 넘기는 값이라, **`CHATBOT_API_KEY` 가 새면 아무 회원으로 주문을 넣을 수 있음** (백엔드 문서 §4).
+
+### 17.9 백엔드로 옮길 때
+
+- `kakao_order_drafts` → `chatbot.order_drafts` (§4.2 방식, `farmassi_admin` 만).
+- HTTP 대신 `FUNCTIONS["review-farm-orders"](FnCtx(user_id=uid, body=..., admin=conn))` 직접 호출.
+  `uid` 는 `auth.identities` 에서 `appUserId` 로 찾은 값(지금 `/chatbot/rpc` 라우트가 하는 일 그대로).
+- 동시성은 `rev` 비교 대신 사용자별 락(`pg_advisory_xact_lock(hashtext(kakao_user_id))`)으로 순서대로 처리하는 편이 단순.
+- 등록 결과 불명(`saving_at`) 처리는 같은 프로세스 안에서는 필요 없어짐(함수 호출이 예외 아니면 결과가 확실).
+
